@@ -1383,7 +1383,7 @@ describe("new-session shortcut forwarding", () => {
 		shellSend.mockClear();
 
 		emitBeforeInput({ key: "N", control: true, shift: true, isAutoRepeat: true });
-		emitBeforeInput({ key: "N", control: true });
+		emitBeforeInput({ key: "A", control: true, shift: true });
 
 		expect(shellFocus).not.toHaveBeenCalled();
 		expect(shellSend).not.toHaveBeenCalledWith(NEW_SESSION_SHORTCUT_CHANNEL);

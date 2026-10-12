@@ -95,12 +95,22 @@ describe("attachAppShortcuts", () => {
 		expect(target.focus.mock.invocationCallOrder[0]).toBeLessThan(target.send.mock.invocationCallOrder[0]);
 	});
 
+	it("forwards the plain Ctrl+N chord on Windows/Linux", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target);
+
+		const event = source.emit({ key: "n", control: true });
+
+		expect(target.send).toHaveBeenCalledWith(NEW_SESSION_SHORTCUT_CHANNEL);
+		expect(event.preventDefault).toHaveBeenCalledTimes(1);
+	});
+
 	it("ignores non-matching chords and key-up events", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
 		attachAppShortcuts(source, false, target);
 
-		source.emit({ key: "n", control: true });
 		source.emit({ key: "N", control: true, shift: true, type: "keyUp" });
 		source.emit({ key: "a", control: true, shift: true });
 

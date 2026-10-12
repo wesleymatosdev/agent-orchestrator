@@ -207,7 +207,7 @@ const api = {
 			};
 		},
 		// Fired by the main process when the app-level new-session shortcut
-		// (⌘N / Ctrl+Shift+N) is pressed in any web contents.
+		// (⌘N / Ctrl+N) is pressed in any web contents.
 		onNewSessionShortcut: (listener: () => void) => {
 			const wrapped = () => listener();
 			ipcRenderer.on(NEW_SESSION_SHORTCUT_CHANNEL, wrapped);

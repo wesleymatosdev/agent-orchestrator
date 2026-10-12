@@ -151,7 +151,9 @@ const binding = (
 export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): readonly ShortcutBinding[] {
 	switch (id) {
 		case "new-session":
-			return [isMac ? binding("n", { meta: true }) : binding("n", { ctrl: true, shift: true })];
+			return isMac
+				? [binding("n", { meta: true })]
+				: [binding("n", { ctrl: true }), binding("n", { ctrl: true, shift: true })];
 		case "new-shell-terminal":
 			return [isMac ? binding("t", { meta: true }) : binding("t", { ctrl: true })];
 		case "close-shell-terminal":
@@ -300,11 +302,14 @@ export const PREVIOUS_TAB_SHORTCUT_CHANNEL = "app:previous-tab";
 export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
 export const FOCUS_TERMINAL_SHORTCUT_CHANNEL = "app:focus-terminal";
 
-// New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a
-// live terminal keystroke (readline/vim "next line"), so the non-mac binding
-// adds Shift to stay clear of the shell. Handled at the application level
-// (main-process before-input-event) so it fires even when focus is inside
-// xterm's helper textarea or a native Browser-preview WebContentsView.
+// New session: ⌘N on macOS, Ctrl+N on Windows/Linux. Ctrl+Shift+N stays as a
+// second non-mac default (it was the original chord, kept for muscle memory;
+// the shortcuts UI lists both chips and either can be removed). Note Ctrl+N is
+// also a live terminal keystroke (readline/vim "next line"), so this chord is
+// consumed app-wide and terminals no longer receive it. Handled at the
+// application level (main-process before-input-event) so it fires even when
+// focus is inside xterm's helper textarea or a native Browser-preview
+// WebContentsView.
 export function matchesNewSessionShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("new-session", chord, isMac);
 }
