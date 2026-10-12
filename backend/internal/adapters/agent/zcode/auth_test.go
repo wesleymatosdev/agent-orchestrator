@@ -95,16 +95,70 @@ func TestAuthStatusUnauthorizedWithEmptyToken(t *testing.T) {
 	}
 }
 
-func TestAuthStatusUnknownWithMalformedToken(t *testing.T) {
+// opaqueToken reproduces the credential shape observed on a real install
+// (zcode-runtime 0.16.5, Windows): three dot-separated parts of undecodable
+// binary — 15- and 16-byte first parts, ~1.4 KB third part — none of which
+// decode to JSON. jwtExpiry must refuse it, and its presence must not be
+// mistaken for a working login: that install showed zcode's own "Model access
+// is not configured · Run /login" banner.
+func opaqueToken() string {
+	return base64.RawURLEncoding.EncodeToString(make([]byte, 15)) + "." +
+		base64.RawURLEncoding.EncodeToString(make([]byte, 16)) + "." +
+		base64.RawURLEncoding.EncodeToString(make([]byte, 1404))
+}
+
+func TestAuthStatusUnknownWithOpaqueToken(t *testing.T) {
+	// Non-JWT tokens carry no locally decodable expiry, and a verified
+	// install in exactly this state was reported by zcode itself as not
+	// configured — so this is Unknown, not Authorized.
+	for name, token := range map[string]string{
+		"opaque-three-part": opaqueToken(),
+		"single-part":       "not-a-jwt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			writeZcodeCredentials(t, home, `{"oauth:zai:access_token": "`+token+`"}`)
+			plugin := &Plugin{resolvedBinary: "zcode"}
+			status, err := plugin.AuthStatus(context.Background())
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if status != ports.AgentAuthStatusUnknown {
+				t.Fatalf("status = %q, want unknown (undecodable token is not evidence of a working login)", status)
+			}
+		})
+	}
+}
+
+func TestAuthStatusUnknownWhenCredentialsUnreadable(t *testing.T) {
+	// Unknown is reserved for inspection failures, not credential states.
+	// A directory in place of the file forces a read error on every OS.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeZcodeCredentials(t, home, `{"oauth:zai:access_token": "not-a-jwt"}`)
+	if err := os.MkdirAll(filepath.Join(home, ".zcode", "v2", "credentials.json"), 0o750); err != nil {
+		t.Fatalf("mkdir credentials-as-dir: %v", err)
+	}
 	plugin := &Plugin{resolvedBinary: "zcode"}
 	status, err := plugin.AuthStatus(context.Background())
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = %q, want unknown (malformed token is not evidence either way)", status)
+		t.Fatalf("status = %q, want unknown (read failure is not evidence either way)", status)
+	}
+}
+
+func TestAuthStatusUnknownWithMalformedCredentialsJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeZcodeCredentials(t, home, `{not json`)
+	plugin := &Plugin{resolvedBinary: "zcode"}
+	status, err := plugin.AuthStatus(context.Background())
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want unknown (malformed credential store is not evidence either way)", status)
 	}
 }

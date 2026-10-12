@@ -18,10 +18,17 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 //
 // The credential that actually governs model access is zcode's OAuth token in
 // ~/.zcode/v2/credentials.json (the apiKey strings in cli/config.json stay
-// populated even after the OAuth session expires). The access token is a JWT;
-// its exp claim is decoded locally — no network call, no signature
-// verification (expiry is a sufficient local signal; the daemon rejects
-// stale tokens on first real use anyway).
+// populated even after the OAuth session expires). When the access token is a
+// plaintext JWT, its exp claim is decoded locally — no network call, no
+// signature verification; expiry is a sufficient local signal because the
+// daemon rejects stale tokens on first real use anyway.
+//
+// Not every install stores a decodable JWT. Verified against zcode-runtime
+// 0.16.5 on Windows, one real credential shape is an opaque three-part token
+// (15- and 16-byte first parts, none of which decode as JSON) alongside
+// zcode itself reporting "Model access is not configured · Run /login" — so
+// token presence is NOT evidence of a working login. Such tokens report
+// Unknown; the terminal surfaces zcode's own /login guidance on first use.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -54,6 +61,10 @@ func zcodeCredentialsAuthStatus() ports.AgentAuthStatus {
 	}
 	exp, ok := jwtExpiry(token)
 	if !ok {
+		// Present but not a decodable JWT: an observed real credential
+		// shape whose validity cannot be determined locally. Deliberately
+		// not Authorized — a verified install carried exactly this shape
+		// while zcode itself reported the login as not configured.
 		return ports.AgentAuthStatusUnknown
 	}
 	if time.Now().After(time.Unix(exp, 0)) {
