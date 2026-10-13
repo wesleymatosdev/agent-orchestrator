@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -216,17 +217,13 @@ func claudeACPLaunchEnv(
 	// a second installation managed by AO.
 	env["CLAUDE_CODE_EXECUTABLE"] = binary
 	selected := strings.TrimSpace(selectedModel)
-	if _, configured := input["ANTHROPIC_CUSTOM_MODEL_OPTION"]; selected != "" &&
-		!isClaudeNativeModelAlias(selected) && !configured &&
-		strings.TrimSpace(os.Getenv("ANTHROPIC_CUSTOM_MODEL_OPTION")) == "" {
-		// availableModels restricts Claude Code's built-in picker but does not
-		// make every provider-discovered API ID a selectable SDK model. The
-		// custom option is the supported bridge for the one API model AO is
-		// actually starting this session with.
-		env["ANTHROPIC_CUSTOM_MODEL_OPTION"] = selected
-	}
 	config, preserve := claudeACPModelConfig(input)
 	if preserve {
+		return env
+	}
+	if selected != "" && !isClaudeNativeModelAlias(selected) && configuredCustomModelOption(input) {
+		// The user (or a wrapper) pinned ANTHROPIC_CUSTOM_MODEL_OPTION in the
+		// launch env; their value is authoritative and needs no bridging.
 		return env
 	}
 
@@ -254,6 +251,20 @@ func claudeACPLaunchEnv(
 			ids = append(ids, selected)
 		}
 	}
+	// availableModels restricts Claude Code's built-in picker but does not make
+	// every provider-discovered API ID a selectable SDK model; the custom
+	// option is the supported bridge for the one API model AO is actually
+	// starting this session with. Only bridge ids the allowlist does not
+	// already carry — re-advertising a selected model that is in availableModels
+	// appends ANTHROPIC_CUSTOM_MODEL_OPTION's own picker row for a model the
+	// list already exposes, so the combo shows the same model twice (raw id row
+	// plus display-name row).
+	if selected != "" &&
+		!isClaudeNativeModelAlias(selected) &&
+		!slices.Contains(ids, selected) &&
+		!configuredCustomModelOption(input) {
+		env["ANTHROPIC_CUSTOM_MODEL_OPTION"] = selected
+	}
 	if len(ids) == 0 {
 		return env
 	}
@@ -278,6 +289,15 @@ func isClaudeNativeModelAlias(model string) bool {
 	default:
 		return false
 	}
+}
+
+// configuredCustomModelOption reports whether the launch env already carries an
+// explicit ANTHROPIC_CUSTOM_MODEL_OPTION (user-pinned, never AO-derived).
+func configuredCustomModelOption(input map[string]string) bool {
+	if strings.TrimSpace(input["ANTHROPIC_CUSTOM_MODEL_OPTION"]) != "" {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("ANTHROPIC_CUSTOM_MODEL_OPTION")) != ""
 }
 
 // claudeACPModelConfig returns a mergeable user configuration. preserve is

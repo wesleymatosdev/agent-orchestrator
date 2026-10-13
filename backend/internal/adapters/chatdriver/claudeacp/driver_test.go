@@ -113,17 +113,30 @@ func TestClaudeACPLaunchEnvPreservesNativePickerWithoutProviderCatalog(t *testin
 	}
 }
 
-func TestClaudeACPLaunchEnvAddsSelectedProviderModelAsCustomOption(t *testing.T) {
+func TestClaudeACPLaunchEnvDoesNotDuplicateCatalogModelsAsCustomOptions(t *testing.T) {
 	t.Setenv("CLAUDE_MODEL_CONFIG", "")
 	t.Setenv("ANTHROPIC_CUSTOM_MODEL_OPTION", "")
 	env := claudeACPLaunchEnv(
 		nil,
 		"/opt/claude",
-		"claude-fable-5",
-		[]ports.AgentModelInfo{{ID: "claude-fable-5"}},
+		"glm-5.3-flash",
+		[]ports.AgentModelInfo{
+			{ID: "glm-5.3"},
+			{ID: "glm-5.3-flash"},
+			{ID: "glm-5.3-flashx"},
+		},
 	)
-	if got := env["ANTHROPIC_CUSTOM_MODEL_OPTION"]; got != "claude-fable-5" {
-		t.Fatalf("ANTHROPIC_CUSTOM_MODEL_OPTION = %q, want selected provider model", got)
+	if got := env["ANTHROPIC_CUSTOM_MODEL_OPTION"]; got != "" {
+		t.Fatalf("ANTHROPIC_CUSTOM_MODEL_OPTION = %q, want omitted: the allowlist already carries the selected model and the custom option would add a duplicate picker row", got)
+	}
+	var config struct {
+		AvailableModels []string `json:"availableModels"`
+	}
+	if err := json.Unmarshal([]byte(env["CLAUDE_MODEL_CONFIG"]), &config); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.AvailableModels, []string{"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"}) {
+		t.Fatalf("availableModels = %v, want the provider catalog verbatim", config.AvailableModels)
 	}
 }
 
