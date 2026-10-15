@@ -4,6 +4,7 @@
 package hermes
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -383,6 +384,12 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 }
 
 // AuthStatus implements the scoped native adapter contract.
+// hermes-orchestrator fork: besides the daemon's process environment, also
+// accept the native hermes credential store (~/.hermes/.env) — the gateway-
+// supervised daemon does not inherit Wesley's shell env, but hermes itself
+// loads that file at launch, so a key present there means the agent can
+// authenticate. Local evidence can only ever yield Configured, never
+// Authorized (matching the claudecode ladder policy).
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -392,7 +399,43 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 			return ports.AgentAuthStatusConfigured, nil
 		}
 	}
+	if hasHermesEnvCredential() {
+		return ports.AgentAuthStatusConfigured, nil
+	}
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+// hasHermesEnvCredential reports whether ~/.hermes/.env defines any provider
+// key hermes actually uses. It never reads values, only presence of a
+// KEY=<non-empty> line.
+func hasHermesEnvCredential() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	f, err := os.Open(filepath.Join(home, ".hermes", ".env"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(name) {
+		case "ZAI_API_KEY", "GLM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY":
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ContinuouslyDetectTerminalActivity implements the scoped native adapter contract.
