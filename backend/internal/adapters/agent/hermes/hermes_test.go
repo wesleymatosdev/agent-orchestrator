@@ -48,10 +48,15 @@ func TestRestoreRefusesUnobservedIdentity(t *testing.T) {
 	}
 }
 func TestLaunchRejectsUnsupportedPermissionsAndRestrictions(t *testing.T) {
-	for _, cfg := range []ports.LaunchConfig{{Permissions: ports.PermissionModeAcceptEdits}, {Permissions: ports.PermissionModeAuto}, {AllowedTools: []string{"read"}}} {
+	for _, cfg := range []ports.LaunchConfig{{Permissions: ports.PermissionModeAcceptEdits}, {AllowedTools: []string{"read"}}} {
 		if _, err := New().GetLaunchCommand(context.Background(), cfg); err == nil {
 			t.Fatal("unsupported control accepted")
 		}
+	}
+	// Fork: "auto" is the standalone-spawn default and maps to hermes' native
+	// approval flow, so it must be accepted.
+	if _, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: ports.PermissionModeAuto}); err != nil {
+		t.Fatalf("auto mode rejected: %v", err)
 	}
 }
 func TestActivityCurrentComposerAndDecision(t *testing.T) {

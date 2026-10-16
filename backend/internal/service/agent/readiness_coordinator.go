@@ -533,7 +533,9 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
 	timeout := c.installTimeout
-	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2) {
+	// hermes-orchestrator fork: the hermes launcher is a Python entrypoint
+	// that takes ~2-5s to answer --version, over the 2s default budget.
+	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2 || item.Harness == domain.HarnessHermes) {
 		timeout = opencodeInstallCheckTimeout
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)

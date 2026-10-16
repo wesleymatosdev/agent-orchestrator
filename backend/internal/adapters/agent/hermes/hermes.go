@@ -70,6 +70,12 @@ func validate(cfg ports.LaunchConfig) error {
 	switch cfg.Permissions {
 	case "", ports.PermissionModeDefault, ports.PermissionModeBypassPermissions:
 		return nil
+	case ports.PermissionModeAuto:
+		// hermes-orchestrator fork: standalone/worker spawns default to
+		// "auto" when no mode is set. hermes has no AO-side permission
+		// injection — its native approval flow IS the auto behavior — so
+		// accept it as the native default.
+		return nil
 	default:
 		return fmt.Errorf("hermes: permission mode %q unsupported; use native default or explicit bypass", cfg.Permissions)
 	}
