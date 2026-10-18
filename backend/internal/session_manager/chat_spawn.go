@@ -347,6 +347,14 @@ func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]strin
 		// Its driver refuses AO-supplied tool servers; the agent uses `ao render`.
 		return nil
 	}
+	if harness == domain.HarnessHermes {
+		// hermes-orchestrator fork: hermes manages its own MCP servers natively
+		// (config.yaml). Passing AO's tool server as an editor MCP policy makes
+		// the gateway refuse session.resume for TUI-created sessions
+		// ("an editor policy is only accepted from an ACP launch, not cli"),
+		// which broke TUI→Chat interface handoff.
+		return nil
+	}
 	executable, err := m.executable()
 	if err != nil || !filepath.IsAbs(executable) {
 		m.logger.Warn("chat session gets no ao tool server; the agent can still run ao render",

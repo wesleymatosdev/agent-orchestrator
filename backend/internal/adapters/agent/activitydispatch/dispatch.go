@@ -75,6 +75,7 @@ var Derivers = map[string]DeriveFunc{
 	"kilocode":     activitystate.StandardDeriveActivityState,
 	"autohand":     activitystate.StandardDeriveActivityState,
 	"vibe":         vibe.DeriveActivityState,
+	"hermes":       activitystate.StandardDeriveActivityState,
 	"fake":         fake.DeriveActivityState,
 }
 
