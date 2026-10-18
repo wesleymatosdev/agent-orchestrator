@@ -315,6 +315,117 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return append(cmd, "--resume", id), true, nil
 }
 
+// NativeConversationID implements ports.AgentInterfaceHandoff: hermes' TUI and
+// Chat surfaces share the native session identity, so a terminal-observed
+// session id (TUI) and a reserved ACP conversation id (Chat) hand off to
+// either interface.
+func (p *Plugin) NativeConversationID(
+	ctx context.Context,
+	session ports.SessionRef,
+	currentMode domain.SessionMode,
+	providerConversationID string,
+) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if currentMode == domain.SessionModeChat {
+		id := strings.TrimSpace(providerConversationID)
+		return id, id != "", nil
+	}
+	id := strings.TrimSpace(session.Metadata[ports.MetadataKeyAgentSessionID])
+	if id == "" || id == "latest" || strings.ContainsAny(id, " /\\\r\n	") {
+		// No observed id in metadata (e.g. after a daemon restart on macOS,
+		// where the Linux-only lease/breadcrumb observation chain cannot run):
+		// resolve from hermes' durable store instead, failing closed on
+		// ambiguity exactly like the observation path.
+		home := strings.TrimSpace(os.Getenv("HERMES_HOME"))
+		if home == "" {
+			userHome, err := os.UserHomeDir()
+			if err != nil {
+				return "", false, err
+			}
+			home = filepath.Join(userHome, ".hermes")
+		}
+		resolved, ok, err := p.nativeSessionIDForWorkspace(ctx, home, session.WorkspacePath)
+		if err != nil || !ok {
+			return "", false, err
+		}
+		return resolved, true, nil
+	}
+	return id, true, nil
+}
+
+// nativeSessionIDForWorkspace resolves the newest top-level hermes session for
+// an exact workspace that has persisted messages. Zero or several candidates
+// stay fail-closed: nothing to hand off, or an ambiguous native identity.
+func (p *Plugin) nativeSessionIDForWorkspace(ctx context.Context, home, workspace string) (string, bool, error) {
+	if home == "" || workspace == "" {
+		return "", false, nil
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryContext(ctx, `SELECT s.id FROM sessions s
+		WHERE TRIM(s.cwd) = ? AND (SELECT count(*) FROM messages WHERE session_id = s.id) > 0
+		  AND (SELECT count(*) FROM sessions child WHERE child.parent_session_id = s.id) = 0
+		ORDER BY s.started_at DESC`, filepath.Clean(workspace))
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = rows.Close() }()
+	var candidates []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			candidates = append(candidates, id)
+		}
+	}
+	switch {
+	case len(candidates) > 1:
+		return "", false, fmt.Errorf("hermes: ambiguous current native identity")
+	case len(candidates) == 1:
+		return candidates[0], true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+// NativeConversationExists implements ports.AgentInterfaceHandoffHistoryProbe:
+// hermes' TUI writes its transcript only after the first prompt, so an
+// observed id without durable history qualifies the transition for a fresh
+// launch instead of a required resume.
+func (p *Plugin) NativeConversationExists(
+	ctx context.Context,
+	session ports.SessionRef,
+	nativeConversationID string,
+	env map[string]string,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	home := strings.TrimSpace(env["HERMES_HOME"])
+	if home == "" {
+		resolved, err := nativeconfig.Resolve(env, "HERMES_HOME", ".hermes")
+		if err != nil {
+			return false, err
+		}
+		home = resolved
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = db.Close() }()
+	var messages int
+	err = db.QueryRowContext(ctx, "SELECT count(*) FROM messages WHERE session_id=?", nativeConversationID).Scan(&messages)
+	if err != nil {
+		return false, nil
+	}
+	return messages > 0, nil
+}
+
 // SessionInfo implements the scoped native adapter contract.
 func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.SessionInfo, bool, error) {
 	return p.readSessionInfo(ctx, ref, "")
@@ -413,6 +524,41 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 			return ports.SessionInfo{}, false, e
 		}
 		found = crumb.SessionID
+	}
+	if found == "" && runtime.GOOS == "darwin" {
+		// hermes-orchestrator fork: the lease/environ/breadcrumb chain above is
+		// Linux-only (it reads /proc), so on macOS a hermes TUI session could
+		// never report its native id. Resolve from hermes' own durable store
+		// instead: the newest top-level session for this exact workspace that
+		// has persisted messages. AO launches at most one hermes per worktree;
+		// ambiguity or absence stays fail-closed.
+		db, e := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
+		if e != nil {
+			return ports.SessionInfo{}, false, e
+		}
+		rows, e := db.QueryContext(ctx, `SELECT s.id FROM sessions s
+			WHERE TRIM(s.cwd) = ? AND (SELECT count(*) FROM messages WHERE session_id = s.id) > 0
+			  AND (SELECT count(*) FROM sessions child WHERE child.parent_session_id = s.id) = 0
+			ORDER BY s.started_at DESC`, filepath.Clean(workspace))
+		if e != nil {
+			_ = db.Close()
+			return ports.SessionInfo{}, false, e
+		}
+		var candidates []string
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				candidates = append(candidates, id)
+			}
+		}
+		_ = rows.Close()
+		_ = db.Close()
+		if len(candidates) > 1 {
+			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
+		}
+		if len(candidates) == 1 {
+			found = candidates[0]
+		}
 	}
 	if found == "" {
 		return ports.SessionInfo{}, false, nil
