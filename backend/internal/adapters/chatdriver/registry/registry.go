@@ -28,7 +28,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commandcodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/deepseekharnessacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/hermesacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/droidacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimchiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
@@ -91,6 +93,7 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 		unrealchat.New(unrealagent.New(), log),
 		deepseekharnessacp.New(deepseekharness.New(), log),
 		commandcodeacp.New(commandcodeagent.New(), log),
+		hermesacp.New(hermes.New(), log),
 	)
 }
 

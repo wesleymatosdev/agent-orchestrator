@@ -3551,7 +3551,7 @@ func TestResolveLegacyModelChoiceDerivesParameterizedCursorAliases(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			choices := []ports.ChatConfigOptionChoice{{Value: tt.choice}}
-			got, ok := resolveLegacyModelChoice(choices, tt.requested)
+			got, ok := resolveLegacyModelChoice(choices, "", tt.requested)
 			if !ok || got != tt.choice {
 				t.Fatalf("resolveLegacyModelChoice(%q) = %q, %v; want %q, true", tt.requested, got, ok, tt.choice)
 			}
@@ -3589,7 +3589,7 @@ func TestResolveLegacyModelChoiceRejectsDroppedParameterizedSemantics(t *testing
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			choices := []ports.ChatConfigOptionChoice{{Value: tt.choice}}
-			if got, ok := resolveLegacyModelChoice(choices, tt.requested); ok {
+			if got, ok := resolveLegacyModelChoice(choices, "", tt.requested); ok {
 				t.Fatalf("resolveLegacyModelChoice(%q) = %q, true; want rejection", tt.requested, got)
 			}
 		})
@@ -3616,7 +3616,7 @@ func TestResolveLegacyModelChoiceDistinguishesThinkingVariants(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.requested, func(t *testing.T) {
-			got, ok := resolveLegacyModelChoice(choices, tt.requested)
+			got, ok := resolveLegacyModelChoice(choices, "", tt.requested)
 			if !ok || got != tt.want {
 				t.Fatalf("resolveLegacyModelChoice(%q) = %q, %v; want %q, true", tt.requested, got, ok, tt.want)
 			}
@@ -4749,5 +4749,38 @@ func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T
 				t.Fatalf("provider conversation = %q, want the fresh session", got)
 			}
 		})
+	}
+}
+
+func TestResolveLegacyModelChoiceProviderScoped(t *testing.T) {
+	choices := []ports.ChatConfigOptionChoice{
+		{Value: "moa:default"},
+		{Value: "zai:glm-5.3-flash"},
+		{Value: "zai:glm-5.3"},
+		{Value: "opencode-zen:glm-5.3-flash"},
+		{Value: "opencode-zen:glm-5.3-flash-free"},
+	}
+	// Ambiguous across providers collapses to the session's current provider.
+	got, ok := resolveLegacyModelChoice(choices, "zai:glm-5.3", "glm-5.3-flash")
+	if !ok || got != "zai:glm-5.3-flash" {
+		t.Fatalf("current-provider disambiguation = %q, %v; want zai:glm-5.3-flash", got, ok)
+	}
+	// A unique suffixed match needs no current-provider context.
+	got, ok = resolveLegacyModelChoice(choices, "", "glm-5.3")
+	if !ok || got != "zai:glm-5.3" {
+		t.Fatalf("unique suffix = %q, %v; want zai:glm-5.3", got, ok)
+	}
+	// Ambiguous with no current provider context refuses.
+	if got, ok := resolveLegacyModelChoice(choices, "", "glm-5.3-flash"); ok {
+		t.Fatalf("ambiguous without current = %q, true; want refusal", got)
+	}
+	// Ambiguous where the current provider does not carry the model refuses.
+	if got, ok := resolveLegacyModelChoice(choices, "moa:default", "glm-5.3-flash"); ok {
+		t.Fatalf("ambiguous, current provider lacks model = %q, true; want refusal", got)
+	}
+	// Exact values still win over suffix matching.
+	got, ok = resolveLegacyModelChoice(choices, "zai:glm-5.3", "zai:glm-5.3")
+	if !ok || got != "zai:glm-5.3" {
+		t.Fatalf("exact = %q, %v; want zai:glm-5.3", got, ok)
 	}
 }

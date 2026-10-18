@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -321,7 +322,14 @@ func choiceOffered(choices []ports.ChatConfigOptionChoice, value string) bool {
 // those settings as parameters; session/set_model accepts only the latter.
 // Exact provider values always win, and an alias is accepted only when it
 // identifies one advertised choice unambiguously.
-func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, currentModel string, requested string) (string, bool) {
+	if os.Getenv("AO_DEBUG_MODEL_RESOLVE") != "" {
+		ids := make([]string, 0, len(choices))
+		for _, c := range choices {
+			ids = append(ids, c.Value)
+		}
+		fmt.Fprintf(os.Stderr, "AO_DEBUG model resolve: requested=%q choices=%v\n", requested, ids)
+	}
 	if choiceOffered(choices, requested) {
 		return requested, true
 	}
@@ -347,9 +355,57 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 		}
 		matched = choice.Value
 	}
-	return matched, matched != ""
+	if matched != "" {
+		return matched, true
+	}
+	// hermes-orchestrator fork: provider-scoped catalogs advertise ids like
+	// "zai:glm-5.3-flash" (hermes) or "provider/model". Accept a bare model id
+	// when the advertised choices identify it after the provider separator:
+	// exactly one match wins; several collapse to the session's current
+	// provider when that is one of them; anything else refuses.
+	current := currentProvider(currentModel)
+	for _, sep := range []string{":", "/"} {
+		suffix := sep + requested
+		matched = ""
+		ambiguous := false
+		for _, choice := range choices {
+			if !strings.HasSuffix(choice.Value, suffix) {
+				continue
+			}
+			if matched != "" || ambiguous {
+				ambiguous = true
+				matched = ""
+				continue
+			}
+			matched = choice.Value
+		}
+		if ambiguous && current != "" {
+			ambiguous = false
+			matched = ""
+			for _, choice := range choices {
+				if strings.HasSuffix(choice.Value, suffix) && choiceProvider(choice.Value) == current {
+					matched = choice.Value
+					break
+				}
+			}
+		}
+		if matched != "" && !ambiguous {
+			return matched, true
+		}
+	}
+	return "", false
 }
 
+// currentProvider extracts the provider prefix of a "provider:model" choice id.
+func currentProvider(value string) string {
+	if i := strings.Index(value, ":"); i > 0 {
+		return value[:i]
+	}
+	return ""
+}
+
+// choiceProvider mirrors currentProvider for a candidate choice.
+func choiceProvider(value string) string { return currentProvider(value) }
 func parameterizedModelAliases(value string) ([]string, bool) {
 	open := strings.IndexByte(value, '[')
 	if open <= 0 || !strings.HasSuffix(value, "]") {

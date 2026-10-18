@@ -476,7 +476,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				continue
 			}
 			modelOptionFound = true
-			resolved, ok := resolveLegacyModelChoice(option.Choices, model)
+			resolved, ok := resolveLegacyModelChoice(option.Choices, option.Current.Select, model)
 			if !ok {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}
