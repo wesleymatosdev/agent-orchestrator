@@ -2,8 +2,10 @@ package hermes
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -174,5 +176,75 @@ func TestRestoreRefusesNativeRotationAfterObservation(t *testing.T) {
 	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-rotation", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "old-conversation"}}})
 	if err == nil || ok || !strings.Contains(err.Error(), "rotated") {
 		t.Fatalf("stale conversation restore: %v %v", ok, err)
+	}
+}
+
+func TestRestoreResolvesDarwinTerminalCrumbWithoutObservationFile(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin terminal-sessions crumb fallback")
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2+948'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	workspace := t.TempDir()
+	home := t.TempDir()
+	data := t.TempDir()
+	dir := sessionDir(data, "ao-darwin-restore")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	crumbDir := filepath.Join(home, "terminal-sessions")
+	if err := os.MkdirAll(crumbDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	current := filepath.Join(crumbDir, "tty-dev-ttys009")
+	if err := os.WriteFile(current, []byte(`{"session_id":"current-conversation","cwd":"`+workspace+`","ts":20}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Same native session observed from another workspace, older timestamp:
+	// must not outrank the workspace-scoped crumb.
+	if err := os.WriteFile(filepath.Join(crumbDir, "tty-dev-ttys008"), []byte(`{"session_id":"current-conversation","cwd":"/elsewhere","ts":10}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crumbDir, "tty-dev-ttys007"), []byte(`{"session_id":"other-conversation","cwd":"`+workspace+`","ts":30}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(t.Context(), "CREATE TABLE sessions(id TEXT PRIMARY KEY, cwd TEXT, parent_session_id TEXT); CREATE TABLE messages(session_id TEXT); INSERT INTO sessions VALUES('current-conversation', ?, NULL); INSERT INTO messages VALUES('current-conversation')", workspace); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-darwin-restore", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "current-conversation"}}})
+	if err != nil || !ok {
+		t.Fatalf("darwin crumb restore: %v %v", ok, err)
+	}
+	if cmd[len(cmd)-2] != "--resume" || cmd[len(cmd)-1] != "current-conversation" {
+		t.Fatalf("resume argv tail: %v", cmd)
+	}
+	observed, readErr := os.ReadFile(filepath.Join(dir, "observed-terminal"))
+	if readErr != nil || strings.TrimSpace(string(observed)) != current {
+		t.Fatalf("observed-terminal=%q err=%v", observed, readErr)
+	}
+
+	// A session whose native id has no terminal crumb stays fail-closed.
+	data = t.TempDir()
+	dir = sessionDir(data, "ao-darwin-missing")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err = New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-darwin-missing", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "unobserved-conversation"}}})
+	if err == nil || ok || !strings.Contains(err.Error(), "not observed") {
+		t.Fatalf("unobserved restore: %v %v", ok, err)
 	}
 }

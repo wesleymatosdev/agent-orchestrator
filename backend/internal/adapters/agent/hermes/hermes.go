@@ -288,11 +288,30 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	terminal, err := os.ReadFile(filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "observed-terminal"))
-	if err != nil {
-		return nil, false, fmt.Errorf("hermes: current terminal identity was not observed")
+	observedPath := filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "observed-terminal")
+	crumbPath := ""
+	if observed, readErr := os.ReadFile(observedPath); readErr == nil {
+		crumbPath = strings.TrimSpace(string(observed))
+	} else {
+		// The lease/environ chain that writes observed-terminal is
+		// Linux-only (it reads /proc). On darwin, resolve hermes' own
+		// terminal-sessions crumb for this exact native session and
+		// workspace — the same proof the darwin store fallback already
+		// accepts — and persist it. No matching crumb keeps the original
+		// fail-closed error.
+		if runtime.GOOS != "darwin" {
+			return nil, false, fmt.Errorf("hermes: current terminal identity was not observed")
+		}
+		resolved, ok := darwinTerminalCrumb(home, cfg.Session.WorkspacePath, id)
+		if !ok {
+			return nil, false, fmt.Errorf("hermes: current terminal identity was not observed")
+		}
+		crumbPath = resolved
+		if writeErr := os.WriteFile(observedPath, []byte(crumbPath), 0o600); writeErr != nil {
+			return nil, false, writeErr
+		}
 	}
-	crumb, err := readBreadcrumb(string(terminal))
+	crumb, err := readBreadcrumb(crumbPath)
 	if err != nil || crumb.SessionID != id {
 		return nil, false, fmt.Errorf("hermes: native terminal rotated after observation; refusing stale restore")
 	}
@@ -722,6 +741,42 @@ func readBreadcrumb(path string) (breadcrumb, error) {
 		return b, fmt.Errorf("hermes: empty native breadcrumb")
 	}
 	return b, e
+}
+
+// darwinTerminalCrumb finds hermes' own terminal-session breadcrumb for one
+// exact native session id and workspace. Hermes writes one crumb per tty; the
+// newest match is the current terminal identity. This replaces the Linux
+// /proc lease proof with the same workspace-scoped evidence the darwin store
+// fallback accepts. Zero matching crumbs reports false so callers keep their
+// fail-closed behavior.
+func darwinTerminalCrumb(home, workspace, sessionID string) (string, bool) {
+	if home == "" || workspace == "" || sessionID == "" {
+		return "", false
+	}
+	dir := filepath.Join(home, "terminal-sessions")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	best := ""
+	var bestTS float64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		crumb, err := readBreadcrumb(filepath.Join(dir, entry.Name()))
+		if err != nil || crumb.SessionID != sessionID {
+			continue
+		}
+		if crumb.Cwd != "" && filepath.Clean(crumb.Cwd) != filepath.Clean(workspace) {
+			continue
+		}
+		if crumb.Timestamp >= bestTS {
+			bestTS = crumb.Timestamp
+			best = filepath.Join(dir, entry.Name())
+		}
+	}
+	return best, best != ""
 }
 
 // ExitDetectionMode implements the scoped native adapter contract.
