@@ -70,7 +70,7 @@ func TestActivityCurrentComposerAndDecision(t *testing.T) {
 
 func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.21.6'\n"), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2+948'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)

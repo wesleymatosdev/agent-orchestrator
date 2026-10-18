@@ -55,7 +55,10 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		cmd := aoprocess.CommandContext(ctx, path, "--version")
 		cmd.WaitDelay = 100 * time.Millisecond
 		b, err := cmd.CombinedOutput()
-		return err == nil && strings.Contains(string(b), "Hermes Agent v0.21.6")
+		// hermes-orchestrator fork: match the identity prefix, not an exact
+		// version — hermes is a git install that updates itself, and the
+		// pinned v0.21.6 check started rejecting v0.22.x as "not installed".
+		return err == nil && strings.Contains(string(b), "Hermes Agent v")
 	}})
 }
 
