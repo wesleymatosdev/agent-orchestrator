@@ -158,13 +158,19 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return readErr
 		}
-		if strings.Contains(string(b), "${") {
-			return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
-		}
 		var config map[string]any
 		if len(b) > 0 {
 			if err := yaml.Unmarshal(b, &config); err != nil {
 				return fmt.Errorf("hermes: invalid native configuration: %w", err)
+			}
+		}
+		// hermes-orchestrator fork: an unresolved expansion only matters in the
+		// keys this adapter renders into the ephemeral prompt (agent, display).
+		// `${...}` elsewhere — mcp server headers, tool commands — is normal
+		// native configuration and must not block launches.
+		for _, key := range []string{"agent", "display"} {
+			if section, ok := config[key]; ok && hasUnresolvedExpansion(section) {
+				return fmt.Errorf("hermes: environment-expanded native instruction configuration is unsupported; preserve it in an explicit native ephemeral prompt")
 			}
 		}
 		original = nativeOverlay(config)
@@ -196,6 +202,28 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	return os.WriteFile(filepath.Join(dir, "native-workspace"), []byte(cfg.WorkspacePath), 0o600)
 }
+// hasUnresolvedExpansion reports whether any string reachable in a parsed
+// YAML section still contains an environment expansion.
+func hasUnresolvedExpansion(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return strings.Contains(t, "${")
+	case map[string]any:
+		for _, val := range t {
+			if hasUnresolvedExpansion(val) {
+				return true
+			}
+		}
+	case []any:
+		for _, val := range t {
+			if hasUnresolvedExpansion(val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func nativeOverlay(config map[string]any) string {
 	agent, _ := config["agent"].(map[string]any)
 	display, _ := config["display"].(map[string]any)

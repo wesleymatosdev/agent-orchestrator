@@ -39,6 +39,32 @@ func TestStandingInstructionsPreserveNativeOverlay(t *testing.T) {
 		t.Fatal("lost native profile")
 	}
 }
+func TestExpansionInUnrelatedConfigKeysDoesNotBlockLaunch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	config := "mcp_servers:\n  rebase:\n    headers:\n      Authorization: Bearer ${MCP_REBASE_KEY}\nagent:\n  system_prompt: Native profile instructions\n"
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO standing instructions"}
+	if err := New().GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("unrelated ${...} must not block launch: %v", err)
+	}
+}
+
+func TestExpansionInInstructionKeysStillRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("agent:\n  system_prompt: expanded ${MY_PROMPT_VAR}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO standing instructions"}
+	if err := New().GetAgentHooks(context.Background(), cfg); err == nil {
+		t.Fatal("expansion inside agent instructions must stay refused")
+	}
+}
 func TestRestoreRefusesUnobservedIdentity(t *testing.T) {
 	for _, id := range []string{"", "latest", "some title", "../../state.db"} {
 		_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
