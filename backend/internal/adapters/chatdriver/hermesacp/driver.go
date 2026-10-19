@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // hermesACPVersionTimeout bounds the `hermes acp --version` admission probe.
@@ -132,7 +132,7 @@ func permissionOption(
 func versionProbe(ctx context.Context, bin string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, hermesACPVersionTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, bin, "acp", "--version") //nolint:gosec,forbidigo // binary is adapter-resolved; args are static
+	cmd := aoprocess.CommandContext(probeCtx, bin, "acp", "--version")
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
