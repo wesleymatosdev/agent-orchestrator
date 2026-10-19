@@ -44,12 +44,12 @@ func (*Plugin) Manifest() adapters.Manifest {
 
 // ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
-	// hermes-orchestrator fork: allow darwin in addition to linux. Upstream PR
-	// is deliberately Linux-only; this fork runs the adapter on Wesley's Mac.
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	// hermes-orchestrator fork: allow darwin and windows in addition to linux.
+	// The upstream PR is deliberately Linux-only.
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux and macOS only")
 	}
-	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", Names: []string{"hermes"}, UnixHomePaths: [][]string{{".local", "bin", "hermes"}, {".hermes", "hermes-agent", ".venv", "bin", "hermes"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
+	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", Names: []string{"hermes"}, WinNames: []string{"hermes"}, UnixHomePaths: [][]string{{".local", "bin", "hermes"}, {".hermes", "hermes-agent", ".venv", "bin", "hermes"}}, WinPaths: []binaryutil.WinPath{{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.exe"}}, {Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}}}, ValidateIdentity: func(ctx context.Context, path string) bool {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		cmd := aoprocess.CommandContext(ctx, path, "--version")
