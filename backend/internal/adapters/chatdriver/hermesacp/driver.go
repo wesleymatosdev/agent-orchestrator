@@ -100,7 +100,7 @@ func permissionOption(
 func versionProbe(ctx context.Context, bin string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, hermesACPVersionTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, bin, "acp", "--version") //nolint:gosec // binary is adapter-resolved; args are static
+	cmd := exec.CommandContext(probeCtx, bin, "acp", "--version") //nolint:gosec,forbidigo // binary is adapter-resolved; args are static
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
