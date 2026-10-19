@@ -20,6 +20,12 @@ export type CloneRepositorySelection = CloneRepositoryDetails & {
 
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
+/** Live clone progress relayed from the daemon while prepare is in flight. */
+export type CloneDialogProgress = {
+	percent: number | null;
+	message: string;
+};
+
 export default function CloneRepositoryDialog({
 	disabled,
 	error,
@@ -31,6 +37,7 @@ export default function CloneRepositoryDialog({
 	onChooseRemoteDestination,
 	open,
 	remote = false,
+	progress = null,
 	shake: externalShake = false,
 	existingProjectPaths = [],
 	value,
@@ -45,6 +52,7 @@ export default function CloneRepositoryDialog({
 	onChooseRemoteDestination?: () => void;
 	open: boolean;
 	remote?: boolean;
+	progress?: CloneDialogProgress | null;
 	shake?: boolean;
 	existingProjectPaths?: readonly string[];
 	existingProjectNames?: readonly string[];
@@ -266,7 +274,7 @@ export default function CloneRepositoryDialog({
 					<form className="min-h-0 overflow-y-auto" onSubmit={submit}>
 						<div className="space-y-4 px-4 pb-1 pt-4">
 							{parentError || destinationPickerError ? (
-								<div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-pretty text-[12px] leading-5 text-destructive" role="alert">
+								<div className="max-h-40 overflow-y-auto whitespace-pre-line rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-pretty text-[12px] leading-5 text-destructive" role="alert">
 									{destinationPickerError ?? parentError}
 								</div>
 							) : null}
@@ -363,6 +371,30 @@ export default function CloneRepositoryDialog({
 							</div>
 
 						</div>
+
+						{progress ? (
+							<div className="px-4 pb-1" role="status" aria-live="polite">
+								<div className="flex items-center gap-3 rounded-lg border border-border/60 bg-[var(--color-bg-import-card)] px-4 py-3 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
+									<LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+									<div className="min-w-0 flex-1">
+										<div className="truncate">
+											{progress.message || t("createProject.cloneProgressRunning", { defaultValue: "Cloning repository…" })}
+										</div>
+										{typeof progress.percent === "number" ? (
+											<div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-border">
+												<div
+													className="h-full rounded-full bg-foreground/70 transition-[width]"
+													style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%` }}
+												/>
+											</div>
+										) : null}
+									</div>
+									{typeof progress.percent === "number" ? (
+										<span className="shrink-0 tabular-nums">{Math.round(progress.percent)}%</span>
+									) : null}
+								</div>
+							</div>
+						) : null}
 
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
