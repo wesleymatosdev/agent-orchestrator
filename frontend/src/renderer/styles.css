@@ -1517,6 +1517,13 @@ textarea,
 	cursor: not-allowed;
 }
 
+/* Chat timeline disclosure rows without an expandable body render as disabled
+   buttons, but they are informational rows, not blocked controls — keep the
+   default cursor instead of the global not-allowed affordance. */
+.cursor-chat-surface .activity-row-toggle:disabled {
+	cursor: default;
+}
+
 .xterm {
 	height: 100%;
 }
