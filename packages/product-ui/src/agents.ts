@@ -47,7 +47,10 @@ export type AgentIdentity = Pick<AgentProfile, "id" | "label"> & {
 	initial: string;
 };
 
-export const AGENT_LABELS: Record<AgentId, string> = {
+// "hermes" is a recognized harness identity (own brand mark, user-owned
+// install) but deliberately not in AGENT_OPTIONS: it is not an AO-installable
+// agent and must not appear in the switcher or installer lists.
+export const AGENT_LABELS: Record<AgentId | "hermes", string> = {
 	"claude-code": "Claude Code",
 	codex: "Codex",
 	aider: "Aider",
