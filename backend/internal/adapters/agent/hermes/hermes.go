@@ -202,6 +202,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	return os.WriteFile(filepath.Join(dir, "native-workspace"), []byte(cfg.WorkspacePath), 0o600)
 }
+
 // hasUnresolvedExpansion reports whether any string reachable in a parsed
 // YAML section still contains an environment expansion.
 func hasUnresolvedExpansion(v any) bool {
