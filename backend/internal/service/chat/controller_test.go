@@ -4609,6 +4609,87 @@ func TestChatHandoffDrainWaitsForRootAfterNestedTurnCompletes(t *testing.T) {
 	}
 }
 
+// A drain handoff whose running turn is blocked on an approval must fail fast
+// instead of deadlocking with the interface transition: the drain waits for
+// the turn, the turn waits for a decision the fenced Chat UI cannot give.
+// Aborting the fence reopens intake so the user can answer and retry.
+func TestChatHandoffDrainFailsFastOnPendingApproval(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "root work", ClientMessageID: "handoff-approval-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("send root turn: %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1",
+		ProviderConversationID: "thread-1",
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["root work"] == domain.TurnStateRunning
+	})
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventApprovalRequested, ProviderTurnID: "provider-turn-1",
+		ProviderItemID: "approval-1", RequestID: "approval-1", Summary: "Approve edit",
+		Decisions: []ports.ChatDecisionOption{{ID: "allow", Label: "Allow", Kind: ports.ChatDecisionAllowOnce}},
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, activity := range s.Activities {
+			if activity.Kind == domain.ActivityKindApproval && activity.Status == domain.ActivityStatusPending {
+				return true
+			}
+		}
+		return false
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ports.ErrChatHandoffDecisionPending) {
+			t.Fatalf("prepare handoff error = %v, want ErrChatHandoffDecisionPending", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain hung while the turn waited on an unresolved approval")
+	}
+
+	// Unblock path: the user answers the approval in the now-interactive Chat
+	// source, the turn finishes, and the same switch request succeeds.
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: "approval-1"},
+		ports.ChatEvent{
+			Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
+			ProviderConversationID: "thread-1", TurnState: domain.TurnStateCompleted,
+		},
+	)
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		if turnStateByText(t, s)["root work"] != domain.TurnStateCompleted {
+			return false
+		}
+		for _, activity := range s.Activities {
+			if activity.Kind == domain.ActivityKindApproval && activity.Status == domain.ActivityStatusPending {
+				return false
+			}
+		}
+		return true
+	})
+	done = make(chan error, 1)
+	go func() {
+		done <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("prepare handoff after resolving the approval: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not become quiescent after the approval was answered")
+	}
+}
+
 // Stop is a brake. Releasing the queue when the user presses it would be the
 // opposite of what the button says, so anything waiting is cancelled with the turn.
 func TestInterruptCancelsWhatIsQueuedBehindTheTurn(t *testing.T) {
