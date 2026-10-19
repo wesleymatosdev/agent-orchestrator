@@ -193,7 +193,16 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	return normalizeConfigOptions(resp.ConfigOptions), nil
+	options := normalizeConfigOptions(resp.ConfigOptions)
+	if len(options) == 0 {
+		// Picker-style agents (hermes) advertise their model catalog through the
+		// legacy `models` field the generated SDK no longer types, so the raw
+		// config options look empty. The conversation path synthesizes a model
+		// option from that state (normalizeSessionOptions); mirror it here so
+		// model discovery sees the same catalog a live session offers.
+		options = normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), resp.Modes)
+	}
+	return options, nil
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
