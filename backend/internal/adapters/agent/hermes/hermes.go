@@ -327,7 +327,14 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
 		return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")
 	}
-	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: cfg.DataDir, SessionID: cfg.Session.ID, WorkspacePath: cfg.Session.WorkspacePath, Config: cfg.Config, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
+	// Hermes retains a gateway session's launch policy on resume and
+	// rejects creation overrides ("Resume retains gateway session
+	// policy; creation overrides are unsupported on resume"), so the
+	// restore command must not carry --model — the session keeps its
+	// own model; switch later with /model.
+	restoreConfig := cfg.Config
+	restoreConfig.Model = ""
+	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: cfg.DataDir, SessionID: cfg.Session.ID, WorkspacePath: cfg.Session.WorkspacePath, Config: restoreConfig, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
 	if err != nil {
 		return nil, false, err
 	}
