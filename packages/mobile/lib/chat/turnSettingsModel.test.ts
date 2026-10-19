@@ -63,11 +63,14 @@ describe("turnSettingsRows", () => {
 			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "agent", choices: [{ value: "agent", name: "Agent" }, { value: "bypass", name: "Bypass permissions" }] },
 		];
 
+		// One non-execution mode choice is the session's fixed policy, not a
+		// permissions catalog, so AO's Approvals row stays beside the Mode row.
 		expect(turnSettingsRows(snapshot(), [], options).map((row) => row.label)).toEqual([
 			"Fast mode",
 			"Model",
 			"Effort",
 			"Mode",
+			"Approvals",
 			"Sandbox",
 		]);
 	});
@@ -79,6 +82,19 @@ describe("turnSettingsRows", () => {
 		const rows = turnSettingsRows(snapshot({ settings: { approvalMode: "bypass-permissions" } }), [], options);
 		expect(rows.map((row) => row.label)).toContain("Approvals");
 		expect(rows.find((row) => row.label === "Approvals")?.value).toBe("Never ask");
+	});
+
+	it("keeps its own approvals row when the provider advertises only its fixed current mode", () => {
+		// What a hermes gateway session puts on the wire: one mode, the session's
+		// current policy, which refuses session/set_mode.
+		const options: ChatConfigOption[] = [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "zai:glm-5.3-flash", choices: [{ value: "zai:glm-5.3-flash", name: "GLM 5.3 Flash" }] },
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", choices: [{ value: "default", name: "Default", description: "Ask before edits." }] },
+		];
+		const rows = turnSettingsRows(snapshot({ harness: "hermes", settings: { approvalMode: "auto" } }), [], options);
+		const approvals = rows.find((row) => row.label === "Approvals");
+		expect(approvals?.value).toBe("Ask when unsure");
+		expect(approvals?.choices.map((choice) => choice.value)).toEqual(["default", "accept-edits", "auto", "bypass-permissions"]);
 	});
 
 	it("builds model, effort, and approvals drill-down rows when provider controls are unavailable", () => {

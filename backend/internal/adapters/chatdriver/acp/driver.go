@@ -77,6 +77,13 @@ type Config struct {
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
+	// SessionModesAdvisory marks agents whose advertised session modes are the
+	// owner's fixed policy rather than a choice: the agent offers exactly its
+	// current mode and refuses session/set_mode (the hermes gateway). The
+	// conversation then neither synthesizes a mode config option from that
+	// state nor attempts set_mode, so the pickers fall back to AO's own
+	// approval modes, which such agents honor through per-turn settings.
+	SessionModesAdvisory bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
 	// PermissionPolicy lets a provider binding resolve permission requests that
@@ -200,9 +207,20 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 		// config options look empty. The conversation path synthesizes a model
 		// option from that state (normalizeSessionOptions); mirror it here so
 		// model discovery sees the same catalog a live session offers.
-		options = normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), resp.Modes)
+		options = normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), d.sessionModes(resp.Modes))
 	}
 	return options, nil
+}
+
+// sessionModes drops a mode advertisement for agents whose modes are advisory
+// (SessionModesAdvisory): the advertised mode is the session's fixed policy,
+// not a selectable choice, and mapping it into the config catalog presented a
+// one-item permissions picker that suppressed AO's own approval modes.
+func (d *Driver) sessionModes(modes *acpsdk.SessionModeState) *acpsdk.SessionModeState {
+	if d.cfg.SessionModesAdvisory {
+		return nil
+	}
+	return modes
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
@@ -310,7 +328,7 @@ func (d *Driver) openNewSession(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 		settings.Approval, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
-		conv.legacyWire.modelState(), resp.Modes,
+		conv.legacyWire.modelState(), d.sessionModes(resp.Modes),
 	)
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
@@ -427,7 +445,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 			cfg.Permissions, d.cfg.ValidateTurnSettings, setup.ConfigOptions,
-			setup.Models, setup.Modes,
+			setup.Models, d.sessionModes(setup.Modes),
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
@@ -513,7 +531,7 @@ func (d *Driver) resumeSession(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
-		conv.legacyWire.modelState(), modes,
+		conv.legacyWire.modelState(), d.sessionModes(modes),
 	)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
 	// Standing context is process input, not transcript history, so a resumed

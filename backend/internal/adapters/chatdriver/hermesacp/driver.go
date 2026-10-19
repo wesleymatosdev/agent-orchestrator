@@ -36,9 +36,17 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityDiffs: true,
 		},
-		Configure:        configure,
-		PermissionPolicy: permissionPolicy,
-		VersionProbe:     probe,
+		Configure: configure,
+		// Hermes advertises exactly its owner's current edit-approval policy as
+		// the session's only mode and refuses session/set_mode (the gateway has
+		// no verb that changes it). The mode is the session's fixed policy, not
+		// a choice: advertising it gave every picker a one-item "permissions"
+		// menu that suppressed AO's own approval modes. AO's approval choice is
+		// honored per turn instead — default/accept-edits/auto through the turn
+		// settings path, bypass through PermissionPolicy.
+		SessionModesAdvisory: true,
+		PermissionPolicy:     permissionPolicy,
+		VersionProbe:         probe,
 	}, log)
 }
 

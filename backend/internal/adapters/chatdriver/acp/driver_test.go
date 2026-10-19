@@ -3414,6 +3414,49 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	}
 }
 
+// Advisory session modes (the hermes gateway: exactly the owner's current
+// edit-approval policy, session/set_mode refused) must not reach the config
+// catalog: a one-choice mode option rendered a one-item permissions picker and
+// suppressed AO's own approval modes on every client.
+func TestACPDriverDropsAdvisorySessionModesFromCatalog(t *testing.T) {
+	agent := &legacyKimiAgent{}
+	driver := New(Config{
+		Harness:              domain.HarnessHermes,
+		Capabilities:         ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:                func(context.Context) error { return nil },
+		Launch:               func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionModesAdvisory: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "kimi-code/kimi-for-coding",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	options, err := conv.(ports.ChatConfigOptionController).ListConfigOptions(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigOptions: %v", err)
+	}
+	if len(options) != 1 || options[0].ID != "model" {
+		t.Fatalf("advisory-mode options = %#v, want the model option only", options)
+	}
+	if _, err := conv.(ports.ChatConfigOptionController).SetConfigOption(context.Background(), "mode", ports.ChatConfigOptionValue{
+		Select: "default",
+	}); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("SetConfigOption mode = %v, want %v", err, ports.ErrChatConfigOptionInvalid)
+	}
+	agent.mu.Lock()
+	modeCalls := agent.modeCalls
+	agent.mu.Unlock()
+	if modeCalls != 0 {
+		t.Fatalf("session/set_mode calls = %d, want 0", modeCalls)
+	}
+}
+
 func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto",
