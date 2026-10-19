@@ -43,8 +43,13 @@ type VersionProbe func(ctx context.Context, bin string) error
 
 // Config describes the small provider-specific portion of a native ACP binding.
 type Config struct {
-	Harness        domain.AgentHarness
-	Capabilities   ports.ChatCapabilities
+	Harness      domain.AgentHarness
+	Capabilities ports.ChatCapabilities
+	// NormalizeText optionally rewrites user-visible provider text (message and
+	// thought chunks, tool-call titles, approval summaries) at the AO boundary.
+	// Used by harnesses whose providers generate display text in a language the
+	// user cannot read. Nil leaves all text untouched.
+	NormalizeText  func(string) string
 	Configure      Configure
 	SessionMode    func(ports.PermissionMode) string
 	SessionOptions func(ports.ChatTurnSettings) []acpdriver.SessionOption
@@ -85,8 +90,9 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 	}
 
 	return acpdriver.Config{
-		Harness:      cfg.Harness,
-		Capabilities: capabilities,
+		Harness:       cfg.Harness,
+		Capabilities:  capabilities,
+		NormalizeText: cfg.NormalizeText,
 		Probe: func(ctx context.Context) error {
 			if cfg.Configure == nil {
 				return fmt.Errorf("%w: incomplete native ACP binding for %s",
