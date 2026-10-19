@@ -299,6 +299,18 @@ const PERMANENT_CODES = new Set([
 	"CHAT_AUTH_REQUIRED",
 ]);
 
+/**
+ * Codes the conversation endpoint answers while a chat controller is still
+ * starting up or mid interface handoff (CHAT_CONTROLLER_NOT_READY when the
+ * controller is not running yet, CHAT_INTERFACE_TRANSITION while a handoff is
+ * in flight). The daemon resolves both on its own, so the remote poll keeps
+ * refreshing instead of treating them as refresh failures.
+ */
+const TRANSIENT_STARTUP_CODES = new Set([
+	"CHAT_CONTROLLER_NOT_READY",
+	"CHAT_INTERFACE_TRANSITION",
+]);
+
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
 	isLoading: boolean;
@@ -325,7 +337,14 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	try {
 		latest = await fetchConversationPage(sessionId, hostId);
 	} catch (error) {
-		queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		// A controller that is still starting (or mid handoff) answers with these
+		// while it comes up; they resolve without client action, so they are not
+		// refresh failures and must not flip the remote-conversation banner over a
+		// still-visible snapshot.
+		const code = apiErrorCode(error);
+		if (!code || !TRANSIENT_STARTUP_CODES.has(code)) {
+			queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		}
 		throw error;
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
@@ -401,6 +420,18 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 				loadOlder: () => {},
 			};
 		}
+		// Remote sessions keep a 2s poll running, and every non-permanent failure
+		// retried here may simply be the chat controller starting up. Stay on the
+		// loading state until the poll reports the failure as sustained (the
+		// refresh-error flag); only permanent codes surface immediately.
+		if (hostId && !refreshError && !(code !== undefined && PERMANENT_CODES.has(code))) {
+			return {
+				isLoading: true,
+				hasOlder: false,
+				isLoadingOlder: false,
+				loadOlder: () => {},
+			};
+		}
 		return {
 			isLoading: false,
 			error: apiErrorMessage(query.error),
@@ -410,9 +441,13 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		};
 	}
 
+	const queryErrorCode = query.error ? apiErrorCode(query.error) : undefined;
 	return {
 		snapshot: query.data,
-		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
+		// A stale success snapshot stays visible while transient refreshes fail;
+		// the banner waits for the poll to confirm the failure (or for a permanent
+		// code, which no retry can resolve).
+		refreshError: hostId && (refreshError || (queryErrorCode !== undefined && PERMANENT_CODES.has(queryErrorCode))) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
