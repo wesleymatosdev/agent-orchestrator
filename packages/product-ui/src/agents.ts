@@ -84,6 +84,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"deepseek-harness": "DeepSeek",
 	openhands: "OpenHands",
 	"command-code": "Command Code",
+	hermes: "Hermes",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

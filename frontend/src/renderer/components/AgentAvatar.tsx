@@ -38,6 +38,8 @@ import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
 import gooseDarkLogo from "../assets/agents/goose-dark.svg";
 import gooseLightLogo from "../assets/agents/goose-light.svg";
+import hermesDarkLogo from "../assets/agents/hermes-dark.svg";
+import hermesLightLogo from "../assets/agents/hermes.svg";
 import grokDarkLogo from "../assets/agents/grok-dark.svg";
 import grokLightLogo from "../assets/agents/grok-light.svg";
 import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
@@ -79,6 +81,7 @@ const LOGOS: AgentLogoSources = {
 	copilot: { light: copilotLightLogo, dark: copilotDarkLogo },
 	aider: aiderLogo,
 	grok: { light: grokLightLogo, dark: grokDarkLogo },
+	hermes: { light: hermesLightLogo, dark: hermesDarkLogo },
 	gemini: geminiLogo,
 	droid: { light: droidLightLogo, dark: droidDarkLogo },
 	fx: { light: fxLightLogo, dark: fxDarkLogo },
