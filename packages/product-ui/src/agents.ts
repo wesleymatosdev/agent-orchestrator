@@ -37,6 +37,7 @@ export const AGENT_OPTIONS = [
 	"deepseek-harness",
 	"openhands",
 	"command-code",
+	"hermes",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
