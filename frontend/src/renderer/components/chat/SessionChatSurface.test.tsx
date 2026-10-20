@@ -363,6 +363,27 @@ describe("SessionChatSurface link routing", () => {
 		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
 	});
 
+	it("keeps approvals writable when hermes advertises only its fixed current mode", () => {
+		conversationState.snapshot = { capabilities: ["config_options"], harness: "hermes" };
+		configState.loaded = true;
+		// The catalog an older daemon forwards for a hermes gateway session: one
+		// mode, the session's current policy, which refuses session/set_mode.
+		// Current daemons drop advisory modes before the wire (SessionModesAdvisory).
+		configState.options = [{
+			id: "mode",
+			name: "Mode",
+			category: "mode",
+			type: "select",
+			currentValue: "default",
+			choices: [{ value: "default", name: "Default", description: "Ask before edits." }],
+		}];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+
+		render(<Wrapper client={queryClient}><SessionChatSurface session={session} /></Wrapper>);
+
+		expect(screen.getByTestId("turn-settings-available")).toHaveTextContent("true");
+	});
+
 	it("leaves switched-off models out of a provider's model option, keeping its current value", async () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.loaded = true;

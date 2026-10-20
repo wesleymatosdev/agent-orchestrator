@@ -7,16 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// hermesComposerChromeLabels names provider-owned text Hermes paints inside or
-// under its composer. Only styled-dim occurrences are forgiven; ordinary
-// visible runes still read as a human draft.
-var hermesComposerChromeLabels = []string{
-	"msg=interrupt",
-	"/queue",
-	"Ctrl+C cancel",
-	"? for help",
-}
-
 // hermesBlockedFrameMarkers mirror the approval/secret frames
 // DetectTerminalActivity classifies as blocked.
 var hermesBlockedFrameMarkers = []string{
@@ -119,17 +109,6 @@ func hermesPlaceholderComposer(text string) bool {
 		}
 	}
 	return false
-}
-
-func hermesComposerState(state terminalui.ComposerState) ports.TerminalComposerState {
-	switch state {
-	case terminalui.ComposerEmpty:
-		return ports.TerminalComposerEmpty
-	case terminalui.ComposerDraft:
-		return ports.TerminalComposerDraft
-	default:
-		return ports.TerminalComposerUnknown
-	}
 }
 
 func hermesBlockedFrameLine(line string) bool {

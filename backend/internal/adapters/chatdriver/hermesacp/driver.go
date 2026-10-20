@@ -36,9 +36,17 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityDiffs: true,
 		},
-		Configure:        configure,
-		PermissionPolicy: permissionPolicy,
-		VersionProbe:     probe,
+		Configure: configure,
+		// Hermes advertises exactly its owner's current edit-approval policy as
+		// the session's only mode and refuses session/set_mode (the gateway has
+		// no verb that changes it). The mode is the session's fixed policy, not
+		// a choice: advertising it gave every picker a one-item "permissions"
+		// menu that suppressed AO's own approval modes. AO's approval choice is
+		// honored per turn instead — default/accept-edits/auto through the turn
+		// settings path, bypass through PermissionPolicy.
+		SessionModesAdvisory: true,
+		PermissionPolicy:     permissionPolicy,
+		VersionProbe:         probe,
 	}, log)
 }
 
@@ -92,7 +100,7 @@ func permissionOption(
 func versionProbe(ctx context.Context, bin string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, hermesACPVersionTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, bin, "acp", "--version") //nolint:gosec // binary is adapter-resolved; args are static
+	cmd := exec.CommandContext(probeCtx, bin, "acp", "--version") //nolint:gosec,forbidigo // binary is adapter-resolved; args are static
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
 	if err != nil {

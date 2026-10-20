@@ -322,7 +322,7 @@ func choiceOffered(choices []ports.ChatConfigOptionChoice, value string) bool {
 // those settings as parameters; session/set_model accepts only the latter.
 // Exact provider values always win, and an alias is accepted only when it
 // identifies one advertised choice unambiguously.
-func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, currentModel string, requested string) (string, bool) {
+func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, currentModel, requested string) (string, bool) {
 	if os.Getenv("AO_DEBUG_MODEL_RESOLVE") != "" {
 		ids := make([]string, 0, len(choices))
 		for _, c := range choices {

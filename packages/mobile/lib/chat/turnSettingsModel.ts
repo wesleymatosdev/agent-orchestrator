@@ -253,14 +253,24 @@ export function orderedProviderControls(options: ChatConfigOption[]): ChatConfig
 }
 
 /**
- * A provider `mode` option replaces the Approvals row only when it offers
- * approval choices. OpenCode advertises build/plan there — execution modes —
- * and mistaking them for approvals leaves the session with no way to bypass.
+ * A provider `mode` option replaces the Approvals row only when it offers a
+ * real choice of approval policies. A single remaining mode is the session's
+ * fixed policy, not an option — hermes' gateway advertises only its current
+ * mode and refuses `session/set_mode` — so treating it as a permissions
+ * catalog replaced AO's four approvals with one unselectable row. Desktop
+ * mirrors this in `partitionConfigOptions` (TurnSettingsBar).
  */
 function isPermissionModeOption(option: ChatConfigOption): boolean {
 	if (option.category !== "mode" && option.id !== "mode") return false;
-	return option.choices.some((choice) =>
-		![choice.value, choice.name].some((text) => /^(?:plan|agent|build)(?:[\s_-]mode)?$/i.test(text.trim())));
+	const kept = option.choices.filter((choice) => {
+		if ([choice.value, choice.name].some((text) => /^(?:plan|agent|build)(?:[\s_-]mode)?$/i.test(text.trim()))) {
+			return false;
+		}
+		// An unmapped "Default" placeholder names no policy (#5849), so it is not
+		// a choice either; one mapped to AO's default mode is.
+		return !(choice.value === "default" && isDefaultPlaceholderLabel(choice.name) && choice.permissionMode !== "default");
+	});
+	return kept.length > 1;
 }
 
 export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): TurnSettingRow[] {
