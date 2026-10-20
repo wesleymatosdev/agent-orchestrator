@@ -45,10 +45,10 @@ When showing or demoing frontend changes, run `ao preview [url]` from inside the
 
 ### Proof harness
 
-`make proof` (core tier, ~3 min) and `make proof-full` (race suites + golangci-lint, slow) run `scripts/proof.sh`, a re-runnable green/red proof of the repo state. Every check prints PASS / FAIL / SKIP(reason) with observed-vs-expected output on failure, and each run writes a receipt JSON to `.proof/receipts/` (plus `.proof/latest.json`); receipts are gitignored attachable artifacts, not committed files.
+`make proof` (core tier, ~3 min), `make proof-full` (race suites + golangci-lint, slow), and `make proof-ui` (behavioral navigation proof, ~1 min) run `scripts/proof.sh`. Core mirrors CI's static checks; **proof-ui is the actual app proof**: Playwright boots the real renderer under `dev:web` and navigates it through the T0/P0 specs (`frontend/e2e/`), asserting flows work — not just that the code compiles. Every check prints PASS / FAIL / SKIP(reason) with observed-vs-expected output on failure, and each run writes a receipt JSON to `.proof/receipts/` (plus `.proof/latest.json`); receipts are gitignored attachable artifacts, not committed files.
 
-- **BEFORE starting work**, run `make proof`. Expect a green baseline; if it is red for pre-existing base-branch reasons, keep the red receipt — do not fix unrelated debt.
-- **AFTER finishing**, run `make proof` again. It must be green before you hand off.
+- **BEFORE starting work**, run `make proof` (and `make proof-ui` if the work touches the renderer). Expect a green baseline; if it is red for pre-existing base-branch reasons, keep the red receipt — do not fix unrelated debt.
+- **AFTER finishing**, run `make proof` again (plus `make proof-ui` for renderer changes). It must be green before you hand off.
 - **Attach both receipt JSONs** (before and after) to the PR and the kanban task — they are the proof record.
 - **Fix loop**: edit → `make proof` → read the failing check's observed-vs-expected output → repeat, until green.
 

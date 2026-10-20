@@ -4,23 +4,27 @@
 # Usage:
 #   scripts/proof.sh          # CORE tier (default): fast, target < ~3 minutes
 #   scripts/proof.sh --full   # FULL tier: explicitly slow (race suites + golangci-lint)
+#   scripts/proof.sh --ui     # UI tier: navigates the real renderer (Playwright, ~1 min)
 #
 # Every check runs even after an earlier failure. Results print as
 # PASS / FAIL / SKIP(reason) lines and are recorded in a receipt JSON under
 # .proof/receipts/. Attach the before/after receipts when proving work.
 #
-# Tiers mirror CI (.github/workflows/go.yml + frontend checks):
+# Tiers mirror CI (.github/workflows/go.yml + frontend checks); each is standalone:
 #   CORE ~ backend "build-test" job (without -race, with -short) +
 #          npm run frontend:typecheck + npm run product-ui:check
 #   FULL ~ the -race suites go.yml runs + npm run lint (golangci-lint)
+#   UI   ~ CI's renderer-smoke slice: Playwright drives the real renderer
+#          under dev:web through the T0/P0 navigation specs (behavioral proof)
 set -euo pipefail
 
 MODE="core"
 case "${1:-}" in
   "") ;;
   --full) MODE="full" ;;
+  --ui) MODE="ui" ;;
   -h|--help)
-    echo "usage: scripts/proof.sh [--full]"
+    echo "usage: scripts/proof.sh [--full|--ui]"
     exit 0
     ;;
   *)
@@ -97,16 +101,18 @@ echo "proof harness — mode: $MODE — branch: $GIT_BRANCH @ ${GIT_SHA:0:9} (di
 echo "----------------------------------------------------------------"
 
 # --- CORE tier: backend build-test job (go.yml) without -race, plus fast frontend checks ---
-run_check "gofmt" \
-  "cd backend && test -z \"\$(gofmt -l .)\" || { echo 'These files need gofmt:'; gofmt -l .; exit 1; }"
-run_check "go-build" "cd backend && go build ./..."
-run_check "go-vet" "cd backend && go vet ./..."
-# -count=1 for determinism (no stale-cache pass); -short is honored by
-# backend/internal/browserruntime. CI's build-test job runs the same suite
-# with -race; that costs minutes locally, so it lives in the FULL tier.
-run_check "go-test" "cd backend && go test -count=1 -short -timeout=15m ./..."
-run_check "frontend-typecheck" "npm run frontend:typecheck"
-run_check "product-ui-check" "npm run product-ui:check"
+if [ "$MODE" != "ui" ]; then
+  run_check "gofmt" \
+    "cd backend && test -z \"\$(gofmt -l .)\" || { echo 'These files need gofmt:'; gofmt -l .; exit 1; }"
+  run_check "go-build" "cd backend && go build ./..."
+  run_check "go-vet" "cd backend && go vet ./..."
+  # -count=1 for determinism (no stale-cache pass); -short is honored by
+  # backend/internal/browserruntime. CI's build-test job runs the same suite
+  # with -race; that costs minutes locally, so it lives in the FULL tier.
+  run_check "go-test" "cd backend && go test -count=1 -short -timeout=15m ./..."
+  run_check "frontend-typecheck" "npm run frontend:typecheck"
+  run_check "product-ui-check" "npm run product-ui:check"
+fi
 
 # --- FULL tier: race suites + golangci-lint (mirror go.yml exactly) ---
 if [ "$MODE" = "full" ]; then
@@ -120,6 +126,16 @@ if [ "$MODE" = "full" ]; then
   else
     skip_check "docker-dependent-ci" "n/a" "Docker unavailable; e2e gate jobs not runnable locally"
   fi
+fi
+
+# --- UI tier: behavioral proof — Playwright navigates the real renderer (CI's renderer-smoke slice) ---
+if [ "$MODE" = "ui" ]; then
+  # Dedicated port + CI=true: CI disables reuseExistingServer, so if anything
+  # already listens on the port the suite fails loudly instead of silently
+  # testing ANOTHER worktree's dev:web renderer (see frontend/playwright.config.ts).
+  run_check "e2e-typecheck" "cd frontend && npm run typecheck:e2e"
+  run_check "renderer-nav" \
+    "cd frontend && CI=true AO_E2E_PORT=5199 npx playwright test --grep \"@T0|@P0\" --reporter=line"
 fi
 
 END_EPOCH="$(date +%s)"
