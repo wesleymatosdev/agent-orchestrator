@@ -82,7 +82,14 @@ func TestLaunchRejectsUnsupportedPermissionsAndRestrictions(t *testing.T) {
 		}
 	}
 	// Fork: "auto" is the standalone-spawn default and maps to hermes' native
-	// approval flow, so it must be accepted.
+	// approval flow, so it must be accepted. The launch path resolves the
+	// hermes binary, which CI runners do not have, so stub one like the
+	// private-query test below.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2+948'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
 	if _, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: ports.PermissionModeAuto}); err != nil {
 		t.Fatalf("auto mode rejected: %v", err)
 	}

@@ -202,6 +202,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	return os.WriteFile(filepath.Join(dir, "native-workspace"), []byte(cfg.WorkspacePath), 0o600)
 }
+
 // hasUnresolvedExpansion reports whether any string reachable in a parsed
 // YAML section still contains an environment expansion.
 func hasUnresolvedExpansion(v any) bool {
@@ -289,7 +290,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	observedPath := filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "observed-terminal")
-	crumbPath := ""
+	var crumbPath string
 	if observed, readErr := os.ReadFile(observedPath); readErr == nil {
 		crumbPath = strings.TrimSpace(string(observed))
 	} else {
@@ -407,6 +408,9 @@ func (p *Plugin) nativeSessionIDForWorkspace(ctx context.Context, home, workspac
 		if rows.Scan(&id) == nil {
 			candidates = append(candidates, id)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
 	}
 	switch {
 	case len(candidates) > 1:
@@ -562,14 +566,15 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if e != nil {
 			return ports.SessionInfo{}, false, e
 		}
+		defer func() { _ = db.Close() }()
 		rows, e := db.QueryContext(ctx, `SELECT s.id FROM sessions s
 			WHERE TRIM(s.cwd) = ? AND (SELECT count(*) FROM messages WHERE session_id = s.id) > 0
 			  AND (SELECT count(*) FROM sessions child WHERE child.parent_session_id = s.id) = 0
 			ORDER BY s.started_at DESC`, filepath.Clean(workspace))
 		if e != nil {
-			_ = db.Close()
 			return ports.SessionInfo{}, false, e
 		}
+		defer func() { _ = rows.Close() }()
 		var candidates []string
 		for rows.Next() {
 			var id string
@@ -577,8 +582,9 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 				candidates = append(candidates, id)
 			}
 		}
-		_ = rows.Close()
-		_ = db.Close()
+		if e := rows.Err(); e != nil {
+			return ports.SessionInfo{}, false, e
+		}
 		if len(candidates) > 1 {
 			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
 		}
@@ -626,7 +632,7 @@ func hasHermesEnvCredential() bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())

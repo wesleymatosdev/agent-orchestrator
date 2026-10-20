@@ -48,6 +48,10 @@ type Config struct {
 	Configure      Configure
 	SessionMode    func(ports.PermissionMode) string
 	SessionOptions func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	// SessionModesAdvisory marks agents whose advertised session modes are the
+	// owner's fixed policy: the agent offers exactly its current mode and
+	// refuses session/set_mode. See acpdriver.Config.SessionModesAdvisory.
+	SessionModesAdvisory bool
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
@@ -142,6 +146,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 			}, nil
 		},
 		SessionMode:                  cfg.SessionMode,
+		SessionModesAdvisory:         cfg.SessionModesAdvisory,
 		SessionOptions:               cfg.SessionOptions,
 		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,

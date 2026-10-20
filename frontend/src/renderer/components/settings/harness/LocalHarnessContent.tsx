@@ -142,6 +142,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
+	// Install jobs are keyed by the daemon's install-target union, a subset of
+	// AgentId: agents without an install plan (e.g. hermes) never have a job,
+	// so the miss is the intended outcome.
+	const jobFor = useCallback((agentId: AgentId): InstallJob | undefined => jobMap.get(agentId as InstallJob["target"]), [jobMap]);
 	const agentAuthPlans = useMemo(() => new Map(authPlans.data?.map((plan) => [plan.agentId, plan]) ?? []), [authPlans.data]);
 	const readinessAgents = useMemo(() => new Map(agents.data?.agents.map((agent) => [agent.id, agent]) ?? []), [agents.data]);
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
@@ -417,7 +421,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	};
 
 	const requestUpdate = (agentId: AgentId) => {
-		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))
+		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActiveInstallJob(jobFor(agentId))
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return;
 		const methods = plans.get(agentId)?.methods ?? [];
 		const method = operationMethodId(agentId);
@@ -457,7 +461,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	};
 
 	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login"): Promise<boolean> => {
-		if (authWorkflowRef.current || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
+		if (authWorkflowRef.current || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobFor(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
 		authStartPendingRef.current = true;
 		updateAuthState(agentId, { pending: true, error: null });
@@ -631,7 +635,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		t,
 		language: i18n.resolvedLanguage ?? "en",
 		plan: plans.get(agentId),
-		job: jobMap.get(agentId),
+		job: jobFor(agentId),
 		installed: installed.has(agentId),
 		selectedMethodId: selectedMethods[agentId],
 		advisoryQuery: advisoryMap.get(agentId),
@@ -810,7 +814,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				confirmLabel={t("settings.harness.logout")}
 				destructive
 				busy={logoutRequest ? authStates[logoutRequest]?.pending : false}
-				confirmDisabled={!logoutRequest || !agentAuthPlans.get(logoutRequest)?.available || !agentAuthPlans.get(logoutRequest)?.logoutCommand || Boolean(authWorkflow) || (logoutRequest ? pendingAgentIds.has(logoutRequest) || isActiveInstallJob(jobMap.get(logoutRequest)) : false)}
+				confirmDisabled={!logoutRequest || !agentAuthPlans.get(logoutRequest)?.available || !agentAuthPlans.get(logoutRequest)?.logoutCommand || Boolean(authWorkflow) || (logoutRequest ? pendingAgentIds.has(logoutRequest) || isActiveInstallJob(jobFor(logoutRequest)) : false)}
 				error={logoutRequest ? authStates[logoutRequest]?.error : null}
 				onConfirm={() => { if (logoutRequest) void startAuth(logoutRequest, "logout").then((started) => { if (started) setLogoutRequest(null); }); }}
 				onOpenChange={(open) => { if (!open && !authStartPendingRef.current) setLogoutRequest(null); }}
