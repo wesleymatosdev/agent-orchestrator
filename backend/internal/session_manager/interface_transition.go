@@ -1156,7 +1156,10 @@ func (m *Manager) watchDrainForPendingDecision(
 		}
 		// Fail durably before cancelling so this specific code wins over the
 		// worker's generic cancelled-transition path.
-		writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Deliberately detached from ctx: the watchdog fires after `cancel` has
+		// torn down the request-scoped context, and the durable DRAIN_BLOCKED_ON_APPROVAL
+		// record must survive that cancellation.
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second) //nolint:gosec // G118: intentional detach; see comment above
 		moved, err := store.AdvanceSessionInterfaceTransition(
 			writeCtx,
 			current.ID,

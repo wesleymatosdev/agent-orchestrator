@@ -45,8 +45,13 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
-	cleanupMu                          sync.Mutex
-	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
+	cleanupMu    sync.Mutex
+	cleanupFacts map[domain.SessionID]domain.SessionCleanupRecord
+	// sessionsMu guards sessions: the interface-transition drain watchdog
+	// (watchDrainForPendingDecision) reads sessions from its own goroutine while
+	// the transition flow mutates them, and the race detector runs the suite
+	// with -race.
+	sessionsMu                         sync.RWMutex
 	sessions                           map[domain.SessionID]domain.SessionRecord
 	pr                                 map[domain.SessionID]domain.PRFacts
 	projects                           map[string]domain.ProjectRecord
@@ -73,6 +78,37 @@ type fakeStore struct {
 	// sharedLog, when non-nil, receives an ordered call entry for each
 	// UpsertSessionWorktree invocation so ordering tests can compare across fakes.
 	sharedLog *[]string
+}
+
+func (f *fakeStore) sessionGet(id domain.SessionID) (domain.SessionRecord, bool) {
+	f.sessionsMu.RLock()
+	defer f.sessionsMu.RUnlock()
+	r, ok := f.sessions[id]
+	return r, ok
+}
+
+func (f *fakeStore) sessionSet(id domain.SessionID, rec domain.SessionRecord) {
+	f.sessionsMu.Lock()
+	defer f.sessionsMu.Unlock()
+	f.sessions[id] = rec
+}
+
+func (f *fakeStore) sessionDelete(id domain.SessionID) {
+	f.sessionsMu.Lock()
+	defer f.sessionsMu.Unlock()
+	delete(f.sessions, id)
+}
+
+// sessionSnapshot copies the sessions map so callers can range it without
+// holding the lock.
+func (f *fakeStore) sessionSnapshot() map[domain.SessionID]domain.SessionRecord {
+	f.sessionsMu.RLock()
+	defer f.sessionsMu.RUnlock()
+	out := make(map[domain.SessionID]domain.SessionRecord, len(f.sessions))
+	for id, rec := range f.sessions {
+		out[id] = rec
+	}
+	return out
 }
 
 func newFakeStore() *fakeStore {
@@ -102,11 +138,11 @@ func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (
 		prefix = "standalone"
 	}
 	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, f.num))
-	f.sessions[rec.ID] = rec
+	f.sessionSet(rec.ID, rec)
 	return rec, nil
 }
 func (f *fakeStore) CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
-	for _, existing := range f.sessions {
+	for _, existing := range f.sessionSnapshot() {
 		if existing.AutomationRunID != nil && rec.AutomationRunID != nil && *existing.AutomationRunID == *rec.AutomationRunID {
 			return existing, false, nil
 		}
@@ -127,7 +163,7 @@ func (f *fakeStore) CreateClientRequestSession(ctx context.Context, rec domain.S
 	return created, err == nil, err
 }
 func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
-	for _, rec := range f.sessions {
+	for _, rec := range f.sessionSnapshot() {
 		if id != "" && rec.ClientRequestID == id {
 			return rec, true, nil
 		}
@@ -135,9 +171,9 @@ func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (d
 	return domain.SessionRecord{}, false, nil
 }
 func (f *fakeStore) CommitClientRequestSession(_ context.Context, id domain.SessionID) error {
-	rec := f.sessions[id]
+	rec, _ := f.sessionGet(id)
 	rec.ClientRequestCommitted = true
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return nil
 }
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
@@ -146,57 +182,57 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	}
 	// Like the real store, a full-row update never writes artifact_dir or
 	// session_output_type; only UpdateSessionArtifactOutput does.
-	if existing, ok := f.sessions[rec.ID]; ok {
+	if existing, ok := f.sessionGet(rec.ID); ok {
 		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
 		rec.OutputType = existing.OutputType
 	}
-	f.sessions[rec.ID] = rec
+	f.sessionSet(rec.ID, rec)
 	return nil
 }
 func (f *fakeStore) SetSessionHibernated(_ context.Context, id domain.SessionID, revision int64, at *time.Time) (bool, error) {
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok || rec.Revision != revision || rec.IsTerminated {
 		return false, nil
 	}
 	if f.hibernationCASConflicts > 0 {
 		f.hibernationCASConflicts--
 		rec.Revision++
-		f.sessions[id] = rec
+		f.sessionSet(id, rec)
 		return false, nil
 	}
 	rec.HibernatedAt = at
 	rec.Revision++
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
 	if f.updateSessionErr != nil {
 		return false, f.updateSessionErr
 	}
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok {
 		return false, nil
 	}
 	rec.Metadata.ArtifactDir = artifactDir
 	rec.OutputType = outputType
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 func (f *fakeStore) UpdateSessionModel(_ context.Context, id domain.SessionID, model string) (bool, error) {
 	if f.updateSessionErr != nil {
 		return false, f.updateSessionErr
 	}
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok {
 		return false, nil
 	}
 	rec.Metadata.Model = model
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 
 func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	canPublish := rec.ProvisionState == domain.SessionProvisionProvisioning && !rec.IsTerminated ||
 		rec.ProvisionState == domain.SessionProvisionFailed && (rec.Metadata.WorkspacePath == "" || rec.Metadata.WorkspacePath == workspacePath)
 	if !ok || !canPublish {
@@ -206,41 +242,41 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	rec.Metadata.WorkspacePath = workspacePath
 	rec.Metadata.WorkspaceRepoPath = workspaceRepoPath
 	rec.UpdatedAt = now
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 
 func (f *fakeStore) SetTaskPreparationBase(_ context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok || !rec.IsTaskPreparation || rec.IsTerminated || rec.ProvisionState != domain.SessionProvisionProvisioning {
 		return false, nil
 	}
 	rec.Metadata.DiffBaseSHA = baseSHA
 	rec.Metadata.DiffBaseRef = baseRef
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 
 func (f *fakeStore) SetSessionProvisionState(_ context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error) {
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok {
 		return false, nil
 	}
 	rec.ProvisionState = state
 	rec.ProvisionError = message
 	rec.UpdatedAt = now
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 
 func (f *fakeStore) SetSessionProvisionSteps(_ context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error {
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok {
 		return nil
 	}
 	rec.ProvisionSteps = append([]domain.SessionProvisionStep(nil), steps...)
 	rec.UpdatedAt = now
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return nil
 }
 
@@ -250,7 +286,7 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 		f.promoteTaskErr = nil
 		return false, err
 	}
-	current, ok := f.sessions[id]
+	current, ok := f.sessionGet(id)
 	if !ok || !current.IsTaskPreparation {
 		return false, nil
 	}
@@ -258,7 +294,7 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	rec.Metadata.Branch = current.Metadata.Branch
 	rec.Metadata.WorkspacePath = current.Metadata.WorkspacePath
 	rec.Metadata.WorkspaceRepoPath = current.Metadata.WorkspaceRepoPath
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 
@@ -266,11 +302,11 @@ func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID
 	if f.deletePrepErr != nil {
 		return false, f.deletePrepErr
 	}
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok || !rec.IsTaskPreparation {
 		return false, nil
 	}
-	delete(f.sessions, id)
+	f.sessionDelete(id)
 	delete(f.worktrees, id)
 	return true, nil
 }
@@ -279,16 +315,16 @@ func (f *fakeStore) UpdateBrowserCapabilityVerifier(_ context.Context, id domain
 	if f.updateBrowserCapabilityVerifierErr != nil {
 		return false, f.updateBrowserCapabilityVerifierErr
 	}
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok || rec.ControllerOwner() != expected {
 		return false, nil
 	}
 	rec.Metadata.BrowserCapabilityVerifier = verifier
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 func (f *fakeStore) RecordSessionLatestUserPrompt(_ context.Context, id domain.SessionID, prompt string, updatedAt time.Time) (bool, error) {
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok || rec.IsTerminated || rec.UpdatedAt.After(updatedAt) {
 		return false, nil
 	}
@@ -299,14 +335,14 @@ func (f *fakeStore) RecordSessionLatestUserPrompt(_ context.Context, id domain.S
 	rec.Metadata.ConversationCheckpointGeneration = ""
 	rec.Metadata.ConversationCheckpointNativeID = ""
 	rec.UpdatedAt = updatedAt
-	f.sessions[id] = rec
+	f.sessionSet(id, rec)
 	return true, nil
 }
 func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	if f.getSessionErr != nil {
 		return domain.SessionRecord{}, false, f.getSessionErr
 	}
-	r, ok := f.sessions[id]
+	r, ok := f.sessionGet(id)
 	return r, ok, nil
 }
 func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
@@ -318,7 +354,7 @@ func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionI
 }
 func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domain.SessionRecord, error) {
 	var out []domain.SessionRecord
-	for _, r := range f.sessions {
+	for _, r := range f.sessionSnapshot() {
 		if r.ProjectID == p {
 			out = append(out, r)
 		}
@@ -330,7 +366,7 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 		return nil, f.listAllErr
 	}
 	var out []domain.SessionRecord
-	for _, r := range f.sessions {
+	for _, r := range f.sessionSnapshot() {
 		out = append(out, r)
 	}
 	return out, nil
@@ -352,7 +388,7 @@ func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool,
 	if f.deleteErr != nil {
 		return false, f.deleteErr
 	}
-	rec, ok := f.sessions[id]
+	rec, ok := f.sessionGet(id)
 	if !ok {
 		return false, nil
 	}
@@ -361,7 +397,7 @@ func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool,
 		rec.Metadata.LatestUserPrompt != "" || rec.Metadata.LatestAssistantUpdate != "" || rec.Metadata.NativeTranscriptPath != "" {
 		return false, nil
 	}
-	delete(f.sessions, id)
+	f.sessionDelete(id)
 	return true, nil
 }
 func (f *fakeStore) GetDisplayPRFactsForSession(_ context.Context, id domain.SessionID) (domain.PRFacts, bool, error) {
@@ -421,22 +457,22 @@ func (l *fakeLCM) ReleaseLaunch(id domain.SessionID, launchID string) {
 }
 func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata domain.SessionMetadata) error {
 	l.completed++
-	rec := l.store.sessions[id]
+	rec, _ := l.store.sessionGet(id)
 	rec.IsTerminated = false
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	rec.FirstSignalAt = time.Now()
 	rec.Metadata = preserveCheckpointOnFakeMarkSpawned(rec.Metadata, metadata)
-	l.store.sessions[id] = rec
+	l.store.sessionSet(id, rec)
 	return nil
 }
 
 func (l *fakeLCM) MarkChatReconnected(_ context.Context, id domain.SessionID, metadata domain.SessionMetadata) error {
-	rec := l.store.sessions[id]
+	rec, _ := l.store.sessionGet(id)
 	rec.Metadata = metadata
 	if rec.AutomationRunID != nil {
 		rec.AutomationLaunchCompleted = true
 	}
-	l.store.sessions[id] = rec
+	l.store.sessionSet(id, rec)
 	return nil
 }
 
@@ -470,7 +506,7 @@ func preserveCheckpointOnFakeMarkSpawned(
 }
 
 func (l *fakeLCM) ApplyActivitySignal(_ context.Context, id domain.SessionID, signal ports.ActivitySignal) error {
-	rec, ok := l.store.sessions[id]
+	rec, ok := l.store.sessionGet(id)
 	if !ok {
 		return ports.ErrSessionNotFound
 	}
@@ -489,7 +525,7 @@ func (l *fakeLCM) ApplyActivitySignal(_ context.Context, id domain.SessionID, si
 		return nil
 	}
 	rec.Activity = domain.Activity{State: signal.State, LastActivityAt: time.Now()}
-	l.store.sessions[id] = rec
+	l.store.sessionSet(id, rec)
 	return nil
 }
 
@@ -533,7 +569,7 @@ func (l *fakeLCM) changeControllerEpoch(
 	nativeConversationID string,
 	restore bool,
 ) (bool, error) {
-	rec, ok := l.store.sessions[id]
+	rec, ok := l.store.sessionGet(id)
 	if !ok || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != source {
 		return false, nil
 	}
@@ -552,7 +588,7 @@ func (l *fakeLCM) changeControllerEpoch(
 		rec.Metadata.ConversationCheckpointUnsettled = false
 	}
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
-	l.store.sessions[id] = rec
+	l.store.sessionSet(id, rec)
 	return true, nil
 }
 func (l *fakeLCM) ConfirmAgentSwitchSourceStopped(ctx context.Context, confirmation domain.AgentSwitchSourceStopConfirmation) (bool, error) {
@@ -594,10 +630,10 @@ func (l *fakeLCM) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		l.terminated = map[domain.SessionID]int{}
 	}
 	l.terminated[id]++
-	rec := l.store.sessions[id]
+	rec, _ := l.store.sessionGet(id)
 	rec.IsTerminated = true
 	rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
-	l.store.sessions[id] = rec
+	l.store.sessionSet(id, rec)
 	return nil
 }
 
@@ -11056,9 +11092,9 @@ type blockOnSendMessenger struct {
 
 func (m *blockOnSendMessenger) Send(_ context.Context, _ domain.SessionID, msg string) error {
 	m.msgs = append(m.msgs, msg)
-	if rec, ok := m.store.sessions[m.sessionID]; ok {
+	if rec, ok := m.store.sessionGet(m.sessionID); ok {
 		rec.Activity.State = domain.ActivityBlocked
-		m.store.sessions[m.sessionID] = rec
+		m.store.sessionSet(m.sessionID, rec)
 	}
 	return nil
 }
@@ -11192,10 +11228,10 @@ type flipOnNudgeMessenger struct {
 func (m *flipOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg string) error {
 	m.msgs = append(m.msgs, msg)
 	if msg == "" && !m.flipped {
-		rec, ok := m.store.sessions[m.sessionID]
+		rec, ok := m.store.sessionGet(m.sessionID)
 		if ok {
 			rec.Activity.State = domain.ActivityActive
-			m.store.sessions[m.sessionID] = rec
+			m.store.sessionSet(m.sessionID, rec)
 		}
 		m.flipped = true
 	}
