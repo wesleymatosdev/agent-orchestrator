@@ -3633,6 +3633,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"target agent unauthorized", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrTargetAgentUnauthorized), apierr.KindInvalid, "TARGET_AGENT_UNAUTHORIZED"},
 		{"worker session required", fmt.Errorf("switch agent mer-orchestrator: %w", sessionmanager.ErrUnsupportedSwitchKind), apierr.KindInvalid, "WORKER_SESSION_REQUIRED"},
 		{"unsupported switch harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrUnsupportedSwitchHarness), apierr.KindInvalid, "UNSUPPORTED_SWITCH_HARNESS"},
+		{"switch target requires chat", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchTargetRequiresChat), apierr.KindInvalid, "SWITCH_TARGET_REQUIRES_CHAT"},
 		{"already using harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrAlreadyUsingHarness), apierr.KindConflict, "ALREADY_USING_HARNESS"},
 		{"switch not found", fmt.Errorf("get switch: %w", sessionmanager.ErrSwitchNotFound), apierr.KindNotFound, "AGENT_SWITCH_NOT_FOUND"},
 		{"stale handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrStaleHandoff), apierr.KindConflict, "STALE_AGENT_HANDOFF"},

@@ -6256,7 +6256,7 @@ export interface components {
              * @description Agent harness to continue the logical AO session with.
              * @enum {string}
              */
-            targetHarness: "claude-code" | "codex" | "fx";
+            targetHarness: "claude-code" | "codex" | "fx" | "hermes";
         };
         SystemMemoryResponse: {
             /** @description What the kernel would hand out without swapping (MemAvailable). */

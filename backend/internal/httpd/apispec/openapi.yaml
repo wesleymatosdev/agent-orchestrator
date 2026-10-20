@@ -17818,6 +17818,7 @@ components:
           - claude-code
           - codex
           - fx
+          - hermes
           type: string
       required:
       - targetHarness

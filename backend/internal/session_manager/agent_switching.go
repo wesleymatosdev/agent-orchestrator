@@ -255,7 +255,14 @@ func (m *Manager) admitAgentSwitch(ctx context.Context, id domain.SessionID, cfg
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w", id, ErrIncompleteHandle)
 	}
 	if !switchHarnessSupported(rec.Harness) || !switchHarnessSupported(cfg.TargetHarness) {
-		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: supported harnesses are claude-code, codex, and fx", id, ErrUnsupportedSwitchHarness)
+		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: supported harnesses are claude-code, codex, fx, and hermes", id, ErrUnsupportedSwitchHarness)
+	}
+	if mode != domain.SessionModeChat && cfg.TargetHarness == domain.HarnessHermes {
+		// Hermes' native terminal exposes no AO hook surface: a terminal target
+		// could neither stage its provider-assigned native id before activation
+		// nor acknowledge continuation delivery. Admit it only where the Chat
+		// driver owns identity, history replay, and delivery acknowledgement.
+		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: hermes can continue the session only in Chat mode; switch the session to the Chat interface first", id, ErrSwitchTargetRequiresChat)
 	}
 	if rec.Harness == cfg.TargetHarness {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: %s", id, ErrAlreadyUsingHarness, cfg.TargetHarness)
@@ -1271,7 +1278,7 @@ func (m *Manager) resolveTargetActivationOutcome(
 
 func switchHarnessSupported(h domain.AgentHarness) bool {
 	switch h {
-	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessFX:
+	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessFX, domain.HarnessHermes:
 		return true
 	default:
 		return false

@@ -81,10 +81,16 @@ var (
 	// ErrSwitchShuttingDown means daemon shutdown has closed background worker
 	// admission, so no new switch can be accepted safely.
 	ErrSwitchShuttingDown = errors.New("session: agent switching unavailable during shutdown")
-	// ErrUnsupportedSwitchHarness keeps the first release deliberately bounded
-	// to providers whose standing-instruction and native-resume behavior AO has
-	// verified end to end.
+	// ErrUnsupportedSwitchHarness keeps switching bounded to providers whose
+	// standing-instruction and native-resume behavior AO has verified end to
+	// end.
 	ErrUnsupportedSwitchHarness = errors.New("session: harness does not support agent switching")
+	// ErrSwitchTargetRequiresChat reports a target harness that AO can continue
+	// only through its Chat driver: the provider's native terminal exposes no
+	// hook surface, so a terminal target could neither stage its fresh native
+	// id before activation nor acknowledge continuation delivery. Hermes is the
+	// first such adapter.
+	ErrSwitchTargetRequiresChat = errors.New("session: target harness supports agent switching only in Chat mode")
 	// ErrUnsupportedSwitchKind keeps the first implementation scoped to worker
 	// sessions. Orchestrators own additional delegation and board semantics and
 	// need an explicit product contract before their process can be replaced.

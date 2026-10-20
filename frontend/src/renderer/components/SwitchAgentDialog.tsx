@@ -48,11 +48,15 @@ export const SWITCH_AGENT_OPTIONS = [
 	{ value: "claude-code", label: "Claude Code" },
 	{ value: "codex", label: "Codex" },
 	{ value: "fx", label: "fx" },
+	{ value: "hermes", label: "Hermes" },
 ] as const satisfies ReadonlyArray<{ value: SwitchAgentHarness; label: string }>;
 
 const ALL_SWITCH_AGENT_OPTIONS = AGENT_OPTIONS.map((value) => ({ value, label: AGENT_LABELS[value] }));
 
-export function canSwitchAgentHarness(
+// canSwitchFromHarness reports whether a session currently running `value` can
+// be a switch source at all. fx has no Chat driver, so it cannot be the source
+// of a Chat-mode switch.
+export function canSwitchFromHarness(
 	value: string,
 	mode?: WorkspaceSession["mode"],
 ): value is SwitchAgentHarness {
@@ -60,6 +64,20 @@ export function canSwitchAgentHarness(
 		SWITCH_AGENT_OPTIONS.some((option) => option.value === value) &&
 		(mode !== "chat" || value !== "fx")
 	);
+}
+
+// canSwitchAgentHarness reports whether `value` may be chosen as a switch
+// target for a session in `mode`. Hermes continues a session only through its
+// Chat driver: its native terminal cannot stage a fresh native id or
+// acknowledge continuation delivery, so the daemon rejects it as a terminal
+// target.
+export function canSwitchAgentHarness(
+	value: string,
+	mode?: WorkspaceSession["mode"],
+): value is SwitchAgentHarness {
+	if (!canSwitchFromHarness(value, mode)) return false;
+	if (mode === "chat") return value !== "fx";
+	return value !== "hermes";
 }
 
 // SwitchAgentDialog is opened from a DropdownMenuItem ("Switch agent" in the

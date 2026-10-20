@@ -1420,6 +1420,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrUnsupportedSwitchHarness):
 		return apierr.Invalid("UNSUPPORTED_SWITCH_HARNESS",
 			"Agent switching is not supported for the requested harness", nil)
+	case errors.Is(err, sessionmanager.ErrSwitchTargetRequiresChat):
+		return apierr.Invalid("SWITCH_TARGET_REQUIRES_CHAT",
+			"This agent can continue the session only in Chat mode; switch the session to the Chat interface first", nil)
 	case errors.Is(err, sessionmanager.ErrAlreadyUsingHarness):
 		return apierr.Conflict("ALREADY_USING_HARNESS",
 			"The session is already using the requested harness", nil)

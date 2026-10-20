@@ -2317,6 +2317,119 @@ func TestSwitchAgentRejectsFXChatWithoutDriverBeforeMutation(t *testing.T) {
 	}
 }
 
+func newHermesSwitchTestAgent(t *testing.T) *switchTestAgent {
+	t.Helper()
+	return &switchTestAgent{
+		configDir:         filepath.Join(t.TempDir(), "hermes"),
+		freshNativeIDMode: ports.FreshNativeSessionIDProviderAssigned,
+	}
+}
+
+func TestSwitchAgentRejectsHermesTerminalTargetBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		source domain.AgentHarness
+	}{
+		{name: "claude-code source", source: domain.HarnessClaudeCode},
+		{name: "codex source", source: domain.HarnessCodex},
+		{name: "fx source", source: domain.HarnessFX},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
+			manager, store, _ := newSwitchTestManager(t, runtime)
+			manager.agents.(switchTestAgents)[domain.HarnessHermes] = newHermesSwitchTestAgent(t)
+			rec := store.sessions["proj-1"]
+			rec.Harness = tt.source
+			store.sessions[rec.ID] = rec
+
+			_, err := switchAgentSynchronously(context.Background(), manager, rec.ID, SwitchAgentConfig{
+				TargetHarness: domain.HarnessHermes, IdempotencyKey: "hermes-terminal-target",
+			})
+			if !errors.Is(err, ErrSwitchTargetRequiresChat) {
+				t.Fatalf("SwitchAgent error = %v, want ErrSwitchTargetRequiresChat", err)
+			}
+			if runtime.created != 0 || runtime.destroyed != 0 || len(store.switches) != 0 {
+				t.Fatalf("unsupported terminal target mutated runtime/saga: created=%d destroyed=%d switches=%d", runtime.created, runtime.destroyed, len(store.switches))
+			}
+			if got := store.sessions[rec.ID].Harness; got != tt.source {
+				t.Fatalf("source harness changed = %q, want %q", got, tt.source)
+			}
+		})
+	}
+}
+
+func TestSwitchAgentChatCompletesBetweenClaudeCodeAndHermes(t *testing.T) {
+	tests := []struct {
+		name   string
+		source domain.AgentHarness
+		target domain.AgentHarness
+	}{
+		{name: "claude-code to hermes", source: domain.HarnessClaudeCode, target: domain.HarnessHermes},
+		{name: "hermes to claude-code", source: domain.HarnessHermes, target: domain.HarnessClaudeCode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
+			manager, store, _ := newSwitchTestManager(t, runtime)
+			manager.agents.(switchTestAgents)[domain.HarnessHermes] = newHermesSwitchTestAgent(t)
+			rec := store.sessions["proj-1"]
+			rec.Harness = tt.source
+			rec.Mode = domain.SessionModeChat
+			rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now().UTC()}
+			rec.Metadata.RuntimeHandleID = ""
+			rec.Metadata.RuntimeLaunchID = ""
+			rec.Metadata.AgentSessionID = ""
+			rec.Metadata.ProviderConversationID = "source-chat-native"
+			rec.Metadata.ControllerGeneration = "source-chat-generation"
+			store.sessions[rec.ID] = rec
+			manager.chat = &switchAgentChatLauncher{recordingLauncher: &recordingLauncher{}, store: store, live: true}
+
+			sw, err := switchAgentSynchronously(context.Background(), manager, rec.ID, SwitchAgentConfig{
+				TargetHarness: tt.target, IdempotencyKey: "hermes-chat-" + tt.name,
+			})
+			if err != nil {
+				t.Fatalf("SwitchAgent: %v", err)
+			}
+			if sw.State != domain.AgentSwitchCompleted {
+				t.Fatalf("switch state = %q, want completed", sw.State)
+			}
+			got := store.sessions[rec.ID]
+			if got.Mode != domain.SessionModeChat || got.Harness != tt.target {
+				t.Fatalf("session owner = mode %q harness %q, want chat/%s", got.Mode, got.Harness, tt.target)
+			}
+			if got.Metadata.ProviderConversationID != "target-chat-native" {
+				t.Fatalf("provider conversation = %q, want target-chat-native", got.Metadata.ProviderConversationID)
+			}
+			if runtime.created != 0 || runtime.destroyed != 0 {
+				t.Fatalf("Chat switch mutated the terminal runtime: created=%d destroyed=%d", runtime.created, runtime.destroyed)
+			}
+		})
+	}
+}
+
+func TestSwitchAgentTerminalFromHermesToCodexCompletes(t *testing.T) {
+	runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
+	manager, store, _ := newSwitchTestManager(t, runtime)
+	manager.agents.(switchTestAgents)[domain.HarnessHermes] = newHermesSwitchTestAgent(t)
+	rec := store.sessions["proj-1"]
+	rec.Harness = domain.HarnessHermes
+	store.sessions[rec.ID] = rec
+
+	sw, err := switchAgentSynchronously(context.Background(), manager, rec.ID, SwitchAgentConfig{
+		TargetHarness: domain.HarnessCodex, IdempotencyKey: "hermes-terminal-source",
+	})
+	if err != nil {
+		t.Fatalf("SwitchAgent: %v", err)
+	}
+	if sw.State != domain.AgentSwitchCompleted {
+		t.Fatalf("switch state = %q, want completed", sw.State)
+	}
+	if got := store.sessions[rec.ID]; got.Harness != domain.HarnessCodex {
+		t.Fatalf("session harness = %q, want codex", got.Harness)
+	}
+}
+
 func TestSwitchAgentFromTUIToFXDeliversCombinedContinuationAfterActivation(t *testing.T) {
 	runtime := &switchCreateCallbackRuntime{fakeRestartRuntime: &fakeRestartRuntime{fakeRuntime: &fakeRuntime{
 		outputs: []string{"source tail", "FX READY"},
