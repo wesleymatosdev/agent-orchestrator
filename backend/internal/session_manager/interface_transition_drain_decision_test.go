@@ -12,6 +12,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// awaitSourceReopen waits for the source chat's intake-reopen signal. The
+// watchdog writes the FAILED phase before cancelling (so the durable code
+// wins), which means the abort can legitimately lag the phase observation;
+// asserting it immediately is flaky under load.
+func awaitSourceReopen(t *testing.T, aborted chan struct{}, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		select {
+		case <-aborted:
+			return
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // A Chat -> TUI drain whose turn is blocked on an approval must fail the
 // transition instead of deadlocking: the drain waits for the turn, the turn
 // waits for a decision the frozen Chat UI can never receive. The regression
@@ -37,13 +57,10 @@ func TestInterfaceTransitionChatToTUIFailsFastWhenDrainBlockedOnDecision(t *test
 	if !strings.Contains(settled.ErrorDetail, "answer it in Chat") {
 		t.Fatalf("errorDetail = %q, want Chat-specific guidance", settled.ErrorDetail)
 	}
-	select {
-	case <-chat.aborted:
-	default:
-		t.Fatal("failed drain did not reopen the Chat source intake")
-	}
-	if got := store.sessions["session-1"].Mode; got != domain.SessionModeChat {
-		t.Fatalf("failed drain changed mode to %q", got)
+	awaitSourceReopen(t, chat.aborted, "failed drain did not reopen the Chat source intake")
+	got, _ := store.sessionGet("session-1")
+	if got.Mode != domain.SessionModeChat {
+		t.Fatalf("failed drain changed mode to %q", got.Mode)
 	}
 	if got := fmt.Sprint(*log); strings.Contains(got, "stop:chat") || strings.Contains(got, "start:tui") {
 		t.Fatalf("failed drain continued past the source: %s", got)
@@ -59,9 +76,9 @@ func TestInterfaceTransitionDrainWatchdogFailsASilentDrainOnPendingDecision(t *t
 		pollInterval:     time.Millisecond,
 		decisionWatchdog: 20 * time.Millisecond,
 	}
-	blocked := store.sessions["session-1"]
+	blocked, _ := store.sessionGet("session-1")
 	blocked.Activity = domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: time.Now()}
-	store.sessions["session-1"] = blocked
+	store.sessionSet("session-1", blocked)
 	chat.prepareBlock = make(chan struct{})
 
 	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1",
@@ -76,13 +93,10 @@ func TestInterfaceTransitionDrainWatchdogFailsASilentDrainOnPendingDecision(t *t
 	if settled.ErrorCode != "DRAIN_BLOCKED_ON_APPROVAL" {
 		t.Fatalf("errorCode = %q, want DRAIN_BLOCKED_ON_APPROVAL", settled.ErrorCode)
 	}
-	select {
-	case <-chat.aborted:
-	default:
-		t.Fatal("watchdog cancellation did not reopen the Chat source intake")
-	}
-	if got := store.sessions["session-1"].Mode; got != domain.SessionModeChat {
-		t.Fatalf("watchdog changed mode to %q", got)
+	awaitSourceReopen(t, chat.aborted, "watchdog cancellation did not reopen the Chat source intake")
+	got, _ := store.sessionGet("session-1")
+	if got.Mode != domain.SessionModeChat {
+		t.Fatalf("watchdog changed mode to %q", got.Mode)
 	}
 }
 
@@ -117,8 +131,9 @@ func TestCancelInterfaceTransitionDuringBlockedChatDrain(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancel did not reopen the Chat source intake")
 	}
-	if got := store.sessions["session-1"].Mode; got != domain.SessionModeChat {
-		t.Fatalf("cancel changed mode to %q", got)
+	got, _ := store.sessionGet("session-1")
+	if got.Mode != domain.SessionModeChat {
+		t.Fatalf("cancel changed mode to %q", got.Mode)
 	}
 }
 

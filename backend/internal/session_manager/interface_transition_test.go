@@ -72,12 +72,12 @@ func (s *transitionLifecycleStore) UpdateSessionFromActivitySignal(
 	rec domain.SessionRecord,
 	expectedRevision int64,
 ) (bool, error) {
-	current, ok := s.sessions[rec.ID]
+	current, ok := s.sessionGet(rec.ID)
 	if !ok || current.Revision != expectedRevision {
 		return false, nil
 	}
 	rec.Revision = expectedRevision + 1
-	s.sessions[rec.ID] = rec
+	s.sessionSet(rec.ID, rec)
 	return true, nil
 }
 
@@ -692,7 +692,7 @@ func (c *checkpointAwareHistoryTransitionChat) StartChat(
 	cfg ChatStart,
 ) (ChatStarted, error) {
 	c.policies = append(c.policies, cfg.HistoryPolicy)
-	rec := c.store.sessions[cfg.SessionID]
+	rec, _ := c.store.sessionGet(cfg.SessionID)
 	checkpoint := rec.Metadata
 	if cfg.HistoryPolicy == domain.SessionInterfaceTransitionHistoryStrict &&
 		checkpoint.ConversationCheckpointState == domain.ConversationCheckpointLegacy &&
