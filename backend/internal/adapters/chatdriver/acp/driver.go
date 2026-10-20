@@ -857,12 +857,18 @@ func isACPGatewayDraining(err error) bool {
 	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
 		return false
 	}
-	if strings.Contains(requestErr.Message, "Gateway draining") {
-		return true
-	}
-	if requestErr.Data != nil {
-		if b, merr := json.Marshal(requestErr.Data); merr == nil && strings.Contains(string(b), "Gateway draining") {
+	// Case-folded so gateway wording drift ("gateway draining", "GATEWAY
+	// DRAINING") degrades to a generic error only when the phrase truly
+	// changes, not when its casing does. update_paused is the Hermes-side
+	// machine reason for the same refusal.
+	for _, phrase := range []string{"gateway draining", "update_paused"} {
+		if strings.Contains(strings.ToLower(requestErr.Message), phrase) {
 			return true
+		}
+		if requestErr.Data != nil {
+			if b, merr := json.Marshal(requestErr.Data); merr == nil && strings.Contains(strings.ToLower(string(b)), phrase) {
+				return true
+			}
 		}
 	}
 	return false

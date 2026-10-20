@@ -1139,11 +1139,26 @@ func (m *Manager) watchDrainForPendingDecision(
 		case <-ticker.C:
 		}
 		current, found, err := store.GetSessionInterfaceTransition(ctx, transition.ID)
-		if err != nil || !found || current.Phase != domain.SessionInterfaceTransitionDraining {
+		if err != nil {
+			// A transient store error (e.g. SQLITE_BUSY) must not disarm the
+			// only backstop against the forever-draining deadlock: keep
+			// polling. A watchdog that exits on one bad read never fires.
+			m.logger.Error("interface transition: drain watchdog read failed; retrying",
+				"sessionID", transition.SessionID, "transitionID", transition.ID, "error", err)
+			pendingSince = time.Time{}
+			continue
+		}
+		if !found || current.Phase != domain.SessionInterfaceTransitionDraining {
 			return
 		}
 		rec, found, err := m.store.GetSession(ctx, transition.SessionID)
-		if err != nil || !found {
+		if err != nil {
+			m.logger.Error("interface transition: drain watchdog session read failed; retrying",
+				"sessionID", transition.SessionID, "transitionID", transition.ID, "error", err)
+			pendingSince = time.Time{}
+			continue
+		}
+		if !found {
 			return
 		}
 		if rec.Activity.State != domain.ActivityWaitingInput && rec.Activity.State != domain.ActivityBlocked {
@@ -1158,26 +1173,41 @@ func (m *Manager) watchDrainForPendingDecision(
 			continue
 		}
 		// Fail durably before cancelling so this specific code wins over the
-		// worker's generic cancelled-transition path.
+		// worker's generic cancelled-transition path. A transient write error
+		// gets a bounded retry instead of abandoning the stuck drain.
 		// Deliberately detached from ctx: the watchdog fires after `cancel` has
 		// torn down the request-scoped context, and the durable DRAIN_BLOCKED_ON_APPROVAL
 		// record must survive that cancellation.
-		writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second) //nolint:gosec // G118: intentional detach; see comment above
-		moved, err := store.AdvanceSessionInterfaceTransition(
-			writeCtx,
-			current.ID,
-			current.Phase,
-			domain.SessionInterfaceTransitionFailed,
-			current.NativeConversationID,
-			"DRAIN_BLOCKED_ON_APPROVAL",
-			"The interface switch waited too long for a pending approval or input request while the source interface was frozen. Answer or cancel the request, then retry the switch.",
-			m.clock(),
-		)
-		writeCancel()
-		if err != nil {
+		var moved bool
+		var writeErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second) //nolint:gosec // G118: intentional detach; see comment above
+			moved, writeErr = store.AdvanceSessionInterfaceTransition(
+				writeCtx,
+				current.ID,
+				current.Phase,
+				domain.SessionInterfaceTransitionFailed,
+				current.NativeConversationID,
+				"DRAIN_BLOCKED_ON_APPROVAL",
+				"The interface switch waited too long for a pending approval or input request while the source interface was frozen. Answer or cancel the request, then retry the switch.",
+				m.clock(),
+			)
+			writeCancel()
+			if writeErr == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(m.interfaceTransition.pollInterval):
+			}
+		}
+		if writeErr != nil {
 			m.logger.Error("interface transition: drain watchdog could not fail the transition",
-				"sessionID", transition.SessionID, "transitionID", transition.ID, "error", err)
-			return
+				"sessionID", transition.SessionID, "transitionID", transition.ID, "error", writeErr)
+			// Keep the watchdog alive: the drain is still stuck, and a later
+			// tick may succeed where these attempts failed.
+			pendingSince = time.Time{}
+			continue
 		}
 		if moved {
 			cancel()

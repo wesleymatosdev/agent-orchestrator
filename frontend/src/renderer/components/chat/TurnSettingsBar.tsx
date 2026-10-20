@@ -1117,10 +1117,18 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 				option.choices.filter((choice) => executionValues.has(choice.value)),
 				permissionChoices,
 			);
+			// A single remaining choice that is an unmapped "Default" placeholder
+			// is the session's fixed policy, not a selection (mirrors mobile
+			// turnSettingsModel.isPermissionModeOption's placeholder filter);
+			// hermes sessions never reach this anyway — the driver marks them
+			// SessionModesAdvisory so no mode catalog is advertised. A single
+			// *mapped* choice stays: it feeds the remember-permissions flow.
+			const isFixedPolicyOnly = (choices: ChatConfigOption["choices"]) =>
+				choices.length === 1 && choices[0].value === "default" && isDefaultPlaceholderLabel(choices[0].name) && choices[0].permissionMode !== "default";
 			if (executionChoices.length > 0) {
 				executionMode = withChoices(option, executionChoices);
-				if (permissionChoices.length > 0) mode = withChoices(option, permissionChoices);
-			} else {
+				if (permissionChoices.length > 0 && !isFixedPolicyOnly(permissionChoices)) mode = withChoices(option, permissionChoices);
+			} else if (!isFixedPolicyOnly(option.choices)) {
 				mode = option;
 			}
 			continue;

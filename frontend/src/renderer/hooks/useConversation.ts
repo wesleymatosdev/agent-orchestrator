@@ -19,7 +19,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -398,6 +398,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		enabled: Boolean(sessionId),
 		select: selectConversationPages,
 	});
+	// Transient-startup patience: a remote session whose controller is coming up
+	// gets a bounded loading window, not an infinite one. After the cap the
+	// surface explains the stall instead of spinning forever on the 2s poll.
+	const transientLoading = useRef<{ key: string; since: number } | null>(null);
+	const TRANSIENT_LOAD_CAP_MS = 120_000;
 	useEffect(() => {
 		if (!hostId || !sessionId) return;
 		const timer = window.setInterval(() => {
@@ -408,10 +413,13 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	if (query.error && (!hostId || !query.data)) {
 		const code = apiErrorCode(query.error);
-		// The session is currently owned by Terminal UI (or its Chat controller is
-		// absent). A deliberate interface switch can change that later, but this
-		// request cannot, so explain it rather than retrying.
-		if (code === "SESSION_MODE_MISMATCH" || code === "CHAT_CONTROLLER_NOT_READY") {
+		// The session is currently owned by Terminal UI. A deliberate interface
+		// switch can change that later, but this request cannot, so explain it
+		// rather than retrying. CHAT_CONTROLLER_NOT_READY is different on a
+		// remote session's first load (no snapshot yet): the controller may
+		// simply still be starting, so it belongs to the bounded transient-
+		// startup window below instead of the unavailable surface.
+		if (code === "SESSION_MODE_MISMATCH" || (code === "CHAT_CONTROLLER_NOT_READY" && Boolean(query.data))) {
 			return {
 				isLoading: false,
 				unavailable: { code, message: apiErrorMessage(query.error) },
@@ -420,17 +428,21 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 				loadOlder: () => {},
 			};
 		}
-		// Remote sessions keep a 2s poll running, and every non-permanent failure
-		// retried here may simply be the chat controller starting up. Stay on the
-		// loading state until the poll reports the failure as sustained (the
-		// refresh-error flag); only permanent codes surface immediately.
+		const transientKey = `${sessionId ?? ""}:${hostId ?? ""}`;
 		if (hostId && !refreshError && !(code !== undefined && PERMANENT_CODES.has(code))) {
-			return {
-				isLoading: true,
-				hasOlder: false,
-				isLoadingOlder: false,
-				loadOlder: () => {},
-			};
+			// Track how long this session has been loading with no snapshot;
+			// past the cap the poll has failed to converge, so explain the stall.
+			if (!transientLoading.current || transientLoading.current.key !== transientKey) {
+				transientLoading.current = { key: transientKey, since: Date.now() };
+			}
+			if (Date.now() - transientLoading.current.since < TRANSIENT_LOAD_CAP_MS) {
+				return {
+					isLoading: true,
+					hasOlder: false,
+					isLoadingOlder: false,
+					loadOlder: () => {},
+				};
+			}
 		}
 		return {
 			isLoading: false,
@@ -439,6 +451,10 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 			isLoadingOlder: false,
 			loadOlder: () => {},
 		};
+	}
+	if (query.data) {
+		// A successful read ends the transient-startup window.
+		transientLoading.current = null;
 	}
 
 	const queryErrorCode = query.error ? apiErrorCode(query.error) : undefined;

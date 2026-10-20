@@ -2148,6 +2148,10 @@ func (c *Controller) BeginHandoff(
 
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	// A single transient store error must not abort a progressing handoff:
+	// require consecutive failed checks before treating it as fatal.
+	consecutiveCheckFailures := 0
+	const maxConsecutiveCheckFailures = 3
 	for {
 		// Quiescence is a dispatch boundary, not merely "pendingTurnID is empty".
 		// dispatch marks the durable row running before it installs pendingTurnID;
@@ -2165,10 +2169,16 @@ func (c *Controller) BeginHandoff(
 			// fast instead of parking the transition in draining forever.
 			pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID)
 			if err != nil {
+				consecutiveCheckFailures++
+				if consecutiveCheckFailures < maxConsecutiveCheckFailures {
+					c.sendMu.Unlock()
+					continue
+				}
 				c.sendMu.Unlock()
 				c.AbortHandoff()
 				return fmt.Errorf("check pending interactions during handoff drain: %w", err)
 			}
+			consecutiveCheckFailures = 0
 			if pending {
 				c.sendMu.Unlock()
 				c.AbortHandoff()
