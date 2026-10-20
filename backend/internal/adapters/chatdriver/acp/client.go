@@ -83,7 +83,7 @@ func (c *conversation) RequestPermission(
 	}
 	summary := "Permission required"
 	if params.ToolCall.Title != nil && strings.TrimSpace(*params.ToolCall.Title) != "" {
-		summary = *params.ToolCall.Title
+		summary = c.normalize(*params.ToolCall.Title)
 	}
 	selected, err := c.requestApproval(ctx, stableACPRequestID(params.Meta), ClientApprovalRequest{
 		Summary: summary, ActivityKind: activityKindFromTool(pointerValue(params.ToolCall.Kind)),
@@ -619,7 +619,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
 		c.mu.Unlock()
 		if isCompacting {
-			if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
+			if delta := c.normalize(contentText(update.AgentMessageChunk.Content)); delta != "" {
 				c.mu.Lock()
 				c.compactionSummary += delta
 				c.mu.Unlock()
@@ -627,7 +627,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			break
 		}
 		id := c.providerItemID(messageID(update.AgentMessageChunk.MessageId, "assistant", turnID))
-		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
+		if delta := c.normalize(contentText(update.AgentMessageChunk.Content)); delta != "" {
 			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
 				c.mu.Lock()
 				item, existed := c.nestedMessages[id]
@@ -658,7 +658,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			break
 		}
 		id := c.providerItemID(messageID(update.AgentThoughtChunk.MessageId, "thought", turnID))
-		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
+		if delta := c.normalize(contentText(update.AgentThoughtChunk.Content)); delta != "" {
 			c.mu.Lock()
 			_, existed := c.thoughts[id]
 			c.thoughts[id] += delta
@@ -672,7 +672,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 	case update.ToolCall != nil:
 		tool := &toolState{
-			id: string(update.ToolCall.ToolCallId), title: update.ToolCall.Title,
+			id: string(update.ToolCall.ToolCallId), title: c.normalize(update.ToolCall.Title),
 			kind: update.ToolCall.Kind, status: update.ToolCall.Status,
 			locations: update.ToolCall.Locations, content: update.ToolCall.Content,
 			rawInput: update.ToolCall.RawInput, rawOutput: update.ToolCall.RawOutput,
@@ -735,6 +735,15 @@ func stableACPEventID(meta map[string]any) string {
 	return strings.TrimSpace(eventID)
 }
 
+// normalize applies the binding's user-visible text mapping. Nil mapping or
+// empty text is returned unchanged.
+func (c *conversation) normalize(text string) string {
+	if c.normalizeText == nil || text == "" {
+		return text
+	}
+	return c.normalizeText(text)
+}
+
 func contentText(content acpsdk.ContentBlock) string {
 	if content.Text == nil {
 		return ""
@@ -759,7 +768,7 @@ func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *to
 		c.tools[id] = tool
 	}
 	if update.Title != nil {
-		tool.title = *update.Title
+		tool.title = c.normalize(*update.Title)
 	}
 	if update.Kind != nil {
 		tool.kind = *update.Kind

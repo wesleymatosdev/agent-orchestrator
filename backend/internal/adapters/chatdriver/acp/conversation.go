@@ -134,6 +134,9 @@ type conversation struct {
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice         func(string) bool
+	// normalizeText rewrites user-visible provider text at the AO boundary.
+	// Nil when the binding supplies no mapping.
+	normalizeText func(string) string
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -1151,12 +1154,14 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	}
 	messageIDs := sortedKeys(messages)
 	for _, id := range messageIDs {
-		text := messages[id]
+		// The binding mapping is idempotent, so normalizing the accumulated
+		// text also catches a label a delta boundary split apart.
+		text := c.normalize(messages[id])
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text})
 	}
 	thoughtIDs := sortedKeys(thoughts)
 	for _, id := range thoughtIDs {
-		text := thoughts[id]
+		text := c.normalize(thoughts[id])
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
 			ActivityStatus: activityStatus, Summary: "Reasoning", Text: text})
