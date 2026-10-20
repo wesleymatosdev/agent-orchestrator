@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -843,9 +844,42 @@ func isACPInternalError(err error) bool {
 	return errors.As(err, &requestErr) && requestErr.Code == -32603
 }
 
+// isACPGatewayDraining reports whether err is the agent's gateway refusing new
+// work because it is draining for a self-update (Hermes pauses every new ACP
+// session while an update owns the install). The refusal is transient - the
+// fence clears when the update finishes - so the caller should surface a
+// retry hint instead of a generic provider failure. The match stays
+// phrase-based: the reason travels either in the RPC message or in the
+// unstructured data payload, and a turn that merely mentions draining is not
+// a refusal.
+func isACPGatewayDraining(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	if strings.Contains(requestErr.Message, "Gateway draining") {
+		return true
+	}
+	if requestErr.Data != nil {
+		if b, merr := json.Marshal(requestErr.Data); merr == nil && strings.Contains(string(b), "Gateway draining") {
+			return true
+		}
+	}
+	return false
+}
+
+// gatewayDrainingHint is appended to normalized ACP errors whose provider
+// gateway is mid-update, so a failed spawn reads as "wait and retry" rather
+// than as a broken integration.
+const gatewayDrainingHint = "the agent's gateway is updating itself and is temporarily refusing new sessions; " +
+	"this clears on its own, usually within a minute - try again"
+
 func normalizeACPError(operation string, err error) error {
 	if isACPAuthRequired(err) {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, err)
+	}
+	if isACPGatewayDraining(err) {
+		return fmt.Errorf("%s: %s: %w", operation, gatewayDrainingHint, err)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }
