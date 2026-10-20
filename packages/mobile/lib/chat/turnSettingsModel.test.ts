@@ -97,6 +97,22 @@ describe("turnSettingsRows", () => {
 		expect(approvals?.choices.map((choice) => choice.value)).toEqual(["default", "accept-edits", "auto", "bypass-permissions"]);
 	});
 
+	it("keeps a single mapped-choice mode row beside approvals — intended, not a catalog", () => {
+		// Pins the kept-length semantics deliberately: a provider advertising
+		// exactly one *mapped* approval policy is still a fixed policy (the
+		// single value is the session's current mode, not a selectable
+		// catalog), so the Mode row stays and AO's Approvals row remains the
+		// permission control. Decision gate from the plus7 review (#7): if a
+		// future provider needs a real one-choice catalog, this is the test to
+		// change — together with desktop partitionConfigOptions.
+		const options: ChatConfigOption[] = [
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "accept-edits", choices: [{ value: "accept-edits", name: "Accept edits" }] },
+		];
+		const rows = turnSettingsRows(snapshot({ settings: { approvalMode: "bypass-permissions" } }), [], options);
+		expect(rows.map((row) => row.label)).toContain("Mode");
+		expect(rows.map((row) => row.label)).toContain("Approvals");
+	});
+
 	it("builds model, effort, and approvals drill-down rows when provider controls are unavailable", () => {
 		const models: ChatModel[] = [{
 			id: "opus",
