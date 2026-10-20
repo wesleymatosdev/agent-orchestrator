@@ -24,11 +24,18 @@ const (
 	interfaceTransitionStepLimit          = 45 * time.Second
 	interfaceDeliveryRetry                = 2 * time.Second
 	interfaceDeliveryIdlePoll             = 30 * time.Second
+	// interfaceTransitionDecisionWatchdog bounds how long a drain may sit in
+	// the draining phase while the session waits on a user decision. Both
+	// drain loops fail fast on a detectable pending approval; the watchdog is
+	// the backstop that keeps a transition from parking in draining silently
+	// when detection is missed.
+	interfaceTransitionDecisionWatchdog = 2 * time.Minute
 )
 
 var (
 	errDrainQuiescenceUnverified = errors.New("AO could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
 	errDrainDecisionPending      = errors.New("AO found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
+	errChatDrainDecisionPending  = errors.New("AO found a pending approval or input request in Chat. The source interface was left untouched; answer it in Chat and retry, or choose Cancel request and switch")
 )
 
 // interfaceTransitionStore is optional so the existing narrow Manager Store
@@ -450,6 +457,15 @@ func (m *Manager) runInterfaceTransition(
 		fail("TRANSITION_STATE_FAILED", err)
 		return
 	}
+	// Backstop for the approval deadlock: both drain loops fail fast on a
+	// detectable pending decision, but a missed detection must never leave the
+	// transition parked in draining while the frozen source waits forever.
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	//nolint:gosec // G118: the watchdog deliberately outlives nothing — it runs on
+	// watchCtx (cancelled with the transition) and its single Background use is the
+	// annotated durable failure write inside, which must survive that cancellation.
+	go m.watchDrainForPendingDecision(watchCtx, transition, run.cancel) //nolint:gosec // G118: see above
 	if err := m.prepareSourceHandoff(ctx, rec, transition.Policy, lastTerminalInputAt); err != nil {
 		code := "SOURCE_QUIESCE_FAILED"
 		switch {
@@ -457,6 +473,13 @@ func (m *Manager) runInterfaceTransition(
 			code = "DRAIN_QUIESCENCE_UNVERIFIED"
 		case errors.Is(err, errDrainDecisionPending):
 			code = "DRAIN_DECISION_PENDING"
+		case errors.Is(err, ports.ErrChatHandoffDecisionPending):
+			// The Chat source drain failed fast on a pending approval or input
+			// request and already reopened source intake. Record the same code
+			// the TUI drain uses so clients render the identical recovery: the
+			// banner with "Cancel request and switch".
+			code = "DRAIN_DECISION_PENDING"
+			err = errChatDrainDecisionPending
 		}
 		fail(code, err)
 		return
@@ -1085,6 +1108,81 @@ func (m *Manager) prepareSourceHandoff(
 			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+// watchDrainForPendingDecision is the drain watchdog. If the session stays on
+// a user-input state for the whole watchdog budget while the transition sits
+// in draining, the transition is failed durably with DRAIN_BLOCKED_ON_APPROVAL
+// and the worker is cancelled — which aborts the source fence and returns
+// control to the user instead of waiting forever on an approval the frozen
+// source interface can never receive. A non-positive budget disables it.
+func (m *Manager) watchDrainForPendingDecision(
+	ctx context.Context,
+	transition domain.SessionInterfaceTransition,
+	cancel context.CancelFunc,
+) {
+	if m.interfaceTransition.decisionWatchdog <= 0 {
+		return
+	}
+	store, ok := m.store.(interfaceTransitionStore)
+	if !ok {
+		return
+	}
+	ticker := time.NewTicker(m.interfaceTransition.pollInterval)
+	defer ticker.Stop()
+	pendingSince := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		current, found, err := store.GetSessionInterfaceTransition(ctx, transition.ID)
+		if err != nil || !found || current.Phase != domain.SessionInterfaceTransitionDraining {
+			return
+		}
+		rec, found, err := m.store.GetSession(ctx, transition.SessionID)
+		if err != nil || !found {
+			return
+		}
+		if rec.Activity.State != domain.ActivityWaitingInput && rec.Activity.State != domain.ActivityBlocked {
+			pendingSince = time.Time{}
+			continue
+		}
+		if pendingSince.IsZero() {
+			pendingSince = time.Now()
+			continue
+		}
+		if time.Since(pendingSince) < m.interfaceTransition.decisionWatchdog {
+			continue
+		}
+		// Fail durably before cancelling so this specific code wins over the
+		// worker's generic cancelled-transition path.
+		// Deliberately detached from ctx: the watchdog fires after `cancel` has
+		// torn down the request-scoped context, and the durable DRAIN_BLOCKED_ON_APPROVAL
+		// record must survive that cancellation.
+		writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second) //nolint:gosec // G118: intentional detach; see comment above
+		moved, err := store.AdvanceSessionInterfaceTransition(
+			writeCtx,
+			current.ID,
+			current.Phase,
+			domain.SessionInterfaceTransitionFailed,
+			current.NativeConversationID,
+			"DRAIN_BLOCKED_ON_APPROVAL",
+			"The interface switch waited too long for a pending approval or input request while the source interface was frozen. Answer or cancel the request, then retry the switch.",
+			m.clock(),
+		)
+		writeCancel()
+		if err != nil {
+			m.logger.Error("interface transition: drain watchdog could not fail the transition",
+				"sessionID", transition.SessionID, "transitionID", transition.ID, "error", err)
+			return
+		}
+		if moved {
+			cancel()
+		}
+		return
 	}
 }
 

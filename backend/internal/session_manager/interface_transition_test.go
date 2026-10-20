@@ -72,12 +72,12 @@ func (s *transitionLifecycleStore) UpdateSessionFromActivitySignal(
 	rec domain.SessionRecord,
 	expectedRevision int64,
 ) (bool, error) {
-	current, ok := s.sessions[rec.ID]
+	current, ok := s.sessionGet(rec.ID)
 	if !ok || current.Revision != expectedRevision {
 		return false, nil
 	}
 	rec.Revision = expectedRevision + 1
-	s.sessions[rec.ID] = rec
+	s.sessionSet(rec.ID, rec)
 	return true, nil
 }
 
@@ -535,6 +535,8 @@ type transitionChat struct {
 	start            ChatStart
 	preflightErr     error
 	startErr         error
+	prepareErr       error
+	prepareBlock     chan struct{}
 	preflightStarted chan struct{}
 	preflightRelease chan struct{}
 	relayMessages    []string
@@ -690,7 +692,7 @@ func (c *checkpointAwareHistoryTransitionChat) StartChat(
 	cfg ChatStart,
 ) (ChatStarted, error) {
 	c.policies = append(c.policies, cfg.HistoryPolicy)
-	rec := c.store.sessions[cfg.SessionID]
+	rec, _ := c.store.sessionGet(cfg.SessionID)
 	checkpoint := rec.Metadata
 	if cfg.HistoryPolicy == domain.SessionInterfaceTransitionHistoryStrict &&
 		checkpoint.ConversationCheckpointState == domain.ConversationCheckpointLegacy &&
@@ -768,9 +770,23 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 	}
 	return c.armErr
 }
-func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
+func (c *transitionChat) PrepareChatHandoff(ctx context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c.preparedPolicy = policy
 	*c.log = append(*c.log, "prepare:chat:"+string(policy))
+	if c.prepareErr != nil {
+		// Mirror the real controller: BeginHandoff aborts the fence itself
+		// before returning a failed drain, so source intake reopens.
+		c.AbortChatHandoff("")
+		return c.prepareErr
+	}
+	if c.prepareBlock != nil {
+		select {
+		case <-ctx.Done():
+			c.AbortChatHandoff("")
+			return ctx.Err()
+		case <-c.prepareBlock:
+		}
+	}
 	return nil
 }
 func (c *transitionChat) AbortChatHandoff(domain.SessionID) {
