@@ -462,7 +462,10 @@ func (m *Manager) runInterfaceTransition(
 	// transition parked in draining while the frozen source waits forever.
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
-	go m.watchDrainForPendingDecision(watchCtx, transition, run.cancel)
+	//nolint:gosec // G118: the watchdog deliberately outlives nothing — it runs on
+	// watchCtx (cancelled with the transition) and its single Background use is the
+	// annotated durable failure write inside, which must survive that cancellation.
+	go m.watchDrainForPendingDecision(watchCtx, transition, run.cancel) //nolint:gosec // G118: see above
 	if err := m.prepareSourceHandoff(ctx, rec, transition.Policy, lastTerminalInputAt); err != nil {
 		code := "SOURCE_QUIESCE_FAILED"
 		switch {
