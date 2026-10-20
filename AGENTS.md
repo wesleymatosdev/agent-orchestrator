@@ -43,6 +43,15 @@ npm run build
 
 When showing or demoing frontend changes, run `ao preview [url]` from inside the session so the change renders in the desktop browser panel (the inspector rail's Browser tab); do not just describe it.
 
+### Proof harness
+
+`make proof` (core tier, ~3 min) and `make proof-full` (race suites + golangci-lint, slow) run `scripts/proof.sh`, a re-runnable green/red proof of the repo state. Every check prints PASS / FAIL / SKIP(reason) with observed-vs-expected output on failure, and each run writes a receipt JSON to `.proof/receipts/` (plus `.proof/latest.json`); receipts are gitignored attachable artifacts, not committed files.
+
+- **BEFORE starting work**, run `make proof`. Expect a green baseline; if it is red for pre-existing base-branch reasons, keep the red receipt — do not fix unrelated debt.
+- **AFTER finishing**, run `make proof` again. It must be green before you hand off.
+- **Attach both receipt JSONs** (before and after) to the PR and the kanban task — they are the proof record.
+- **Fix loop**: edit → `make proof` → read the failing check's observed-vs-expected output → repeat, until green.
+
 ### Desktop lab (running the real Electron app for UI review)
 
 For visual verification that needs the real app rather than `ao preview` or `dev:web`, run the checkout in an isolated worktree against scratch data. Never use the invoking working tree (it may hold unrelated uncommitted work) and never touch the user's real `~/.ao` data.
