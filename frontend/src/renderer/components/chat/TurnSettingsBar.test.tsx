@@ -344,6 +344,40 @@ describe("ACP session config options", () => {
 		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 	});
 
+	it("shows AO's full approval menu when the provider's only mode is its fixed policy", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		// What a hermes gateway session puts on the wire (older daemons still
+		// forward it): one mode, the session's current policy, which refuses
+		// session/set_mode. It must not become a one-item permissions picker.
+		const mode: ChatConfigOption = {
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default",
+			choices: [{ value: "default", name: "Default", description: "Ask before edits." }],
+		};
+		expect(hasProviderPermissionMode([mode])).toBe(false);
+		render(
+			<TurnSettingsBar
+				harness="hermes"
+				models={[]}
+				settings={{}}
+				configOptions={[mode]}
+				onChangeConfigOption={vi.fn()}
+				onChange={onChange}
+			/>,
+		);
+		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
+		expect(screen.queryByText("Ask before edits.")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
+			"Use agent permissions",
+			"Accept edits",
+			"Auto-approve",
+			"Bypass permissions",
+		]);
+		await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "bypass-permissions" });
+	});
+
 	it("keeps a mapped permission default selectable under its meaningful label", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
