@@ -255,3 +255,63 @@ func TestRestoreResolvesDarwinTerminalCrumbWithoutObservationFile(t *testing.T) 
 		t.Fatalf("unobserved restore: %v %v", ok, err)
 	}
 }
+
+// AO's background title generation spawns a hermes child session per generated
+// title, under <data>/background-tasks/title… — a foreign cwd. Those utility
+// children are not history continuations and must not block the chat→TUI
+// restore; only a same-workspace child (a real compaction fork) may.
+func TestGetRestoreCommandIgnoresForeignWorkspaceChildren(t *testing.T) {
+	home := t.TempDir()
+	workspace := "/workspace"
+	data := t.TempDir()
+	dir := sessionDir(data, "ao-titled")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-write observed-terminal (the darwin crumb fallback is GOOS-gated);
+	// the children rule under test is OS-independent.
+	crumbPath := filepath.Join(home, "terminal-sessions", "tty-dev-ttys010")
+	if err := os.WriteFile(filepath.Join(dir, "observed-terminal"), []byte(crumbPath), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Stub the hermes binary: GetRestoreCommand resolves it on PATH after the
+	// children rule, and CI runners have no hermes install.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2+948'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	crumbDir := filepath.Join(home, "terminal-sessions")
+	if err := os.MkdirAll(crumbDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(crumbPath, []byte(`{"session_id":"titled-conversation","cwd":"`+workspace+`","ts":20}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(t.Context(), `CREATE TABLE sessions(id TEXT PRIMARY KEY, cwd TEXT, parent_session_id TEXT); CREATE TABLE messages(session_id TEXT);
+		INSERT INTO sessions VALUES('titled-conversation', ?, NULL);
+		INSERT INTO messages VALUES('titled-conversation');
+		INSERT INTO sessions VALUES('title-task-1', '/data/background-tasks/title', 'titled-conversation');
+		INSERT INTO sessions VALUES('title-task-2', '/data/background-tasks/title', 'titled-conversation')`, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-titled", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "titled-conversation"}}}); err != nil {
+		t.Fatalf("foreign-cwd children must not block restore: %v", err)
+	}
+	// A same-workspace child is a real compaction fork and still refuses.
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO sessions VALUES('compaction-child', ?, 'titled-conversation')`, workspace); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-titled", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "titled-conversation"}}})
+	if err == nil || !strings.Contains(err.Error(), "native history missing") {
+		t.Fatalf("same-workspace child must still refuse restore, got %v", err)
+	}
+}
