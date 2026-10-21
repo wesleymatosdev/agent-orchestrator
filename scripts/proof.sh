@@ -133,9 +133,25 @@ if [ "$MODE" = "ui" ]; then
   # Dedicated port + CI=true: CI disables reuseExistingServer, so if anything
   # already listens on the port the suite fails loudly instead of silently
   # testing ANOTHER worktree's dev:web renderer (see frontend/playwright.config.ts).
+  # Visual evidence is retained per run under .proof/reports/<run_id>/:
+  #   html/      — self-contained Playwright HTML report (all 60 tests, timings)
+  #   artifacts/ — per-test results (error context, expected/received snapshots);
+  #                on a red run the failed tests are re-traced here with full
+  #                step screenshots (open with: npx playwright show-trace <zip>)
+  UI_REPORT_DIR="$REPO_ROOT/.proof/reports/${RUN_ID}"
+  mkdir -p "$UI_REPORT_DIR"
   run_check "e2e-typecheck" "npm" "cd frontend && npm run typecheck:e2e"
   run_check "renderer-nav" "npx" \
-    "cd frontend && CI=true AO_E2E_PORT=5199 npx playwright test --grep \"@T0|@P0\" --reporter=line"
+    "cd frontend && CI=true AO_E2E_PORT=5199 PLAYWRIGHT_HTML_OUTPUT_DIR='$UI_REPORT_DIR/html' PLAYWRIGHT_HTML_OPEN=never npx playwright test --grep \"@T0|@P0\" --reporter=line,html --output '$UI_REPORT_DIR/artifacts'"
+  NAV_STATUS="$(awk -F'\t' '$1=="renderer-nav"{s=$3} END{print s}' "$RESULTS_TSV")"
+  if [ "$NAV_STATUS" = "FAIL" ]; then
+    # --last-failed reads <output>/.last-run.json, so the re-run must reuse the
+    # main artifacts dir (traced re-runs overwrite those tests' results there);
+    # the trace-enabled report lands in html-failures/.
+    run_check "renderer-nav-trace" "npx" \
+      "cd frontend && CI=true AO_E2E_PORT=5199 PLAYWRIGHT_HTML_OUTPUT_DIR='$UI_REPORT_DIR/html-failures' PLAYWRIGHT_HTML_OPEN=never npx playwright test --grep \"@T0|@P0\" --last-failed --trace on --reporter=line --output '$UI_REPORT_DIR/artifacts'"
+  fi
+  printf 'visual report: %s/html (open with: npx playwright show-report "%s/html")\n' "$UI_REPORT_DIR" "$UI_REPORT_DIR"
 fi
 
 END_EPOCH="$(date +%s)"
