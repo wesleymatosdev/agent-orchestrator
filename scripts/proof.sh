@@ -28,7 +28,7 @@ case "${1:-}" in
     exit 0
     ;;
   *)
-    echo "unknown argument: $1 (expected --full or nothing)" >&2
+    echo "unknown argument: $1 (expected --full, --ui, or nothing)" >&2
     exit 2
     ;;
 esac
