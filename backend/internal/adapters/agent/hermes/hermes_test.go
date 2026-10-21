@@ -271,11 +271,17 @@ func TestGetRestoreCommandIgnoresForeignWorkspaceChildren(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Pre-write observed-terminal (the darwin crumb fallback is GOOS-gated);
+	// the children rule under test is OS-independent.
+	crumbPath := filepath.Join(home, "terminal-sessions", "tty-dev-ttys010")
+	if err := os.WriteFile(filepath.Join(dir, "observed-terminal"), []byte(crumbPath), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	crumbDir := filepath.Join(home, "terminal-sessions")
 	if err := os.MkdirAll(crumbDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(crumbDir, "tty-dev-ttys010"), []byte(`{"session_id":"titled-conversation","cwd":"`+workspace+`","ts":20}`), 0o600); err != nil {
+	if err := os.WriteFile(crumbPath, []byte(`{"session_id":"titled-conversation","cwd":"`+workspace+`","ts":20}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
