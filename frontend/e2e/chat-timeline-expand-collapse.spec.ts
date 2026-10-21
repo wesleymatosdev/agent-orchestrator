@@ -150,17 +150,20 @@ test("timeline expand, escape, and per-turn hide flows @T0", async ({ page }) =>
 		await page.screenshot({ path: `${directory}/1-before-collapsed.png`, fullPage: true });
 	}
 
-	// Expand: accordion, then the run, then every row — full command + output.
+	// Expand: accordion, then the run, then every subgroup and row — full
+	// command + output in the explore body of each tool-call row.
 	await log.getByRole("button", { name: /Worked for/ }).click();
-	for (const toggle of [".activity-run-toggle", ".activity-subgroup-toggle"]) {
-		for (let pass = 0; pass < 5; pass += 1) {
+	for (const toggle of [".activity-run-toggle", ".activity-subgroup-toggle", ".activity-row-toggle"]) {
+		for (let pass = 0; pass < 8; pass += 1) {
 			const collapsed = log.locator(`${toggle}[aria-expanded='false']`);
 			if ((await collapsed.count()) === 0) break;
 			await collapsed.first().click();
+			await page.waitForTimeout(150);
 		}
 	}
 
-	await expect(log.getByText("go test ./internal/...", { exact: true })).toBeVisible();
+	// The row keeps its label; its explore body repeats the full command.
+	await expect(log.getByRole("button", { name: /go test \.\/internal\/\.\.\./ })).toBeVisible();
 	// The long command's full text is in the expanded body (wrapped, selectable).
 	const longBody = log.locator("pre.cursor-chat-explore-command", { hasText: "docker buildx build" });
 	await expect(longBody).toBeVisible();
@@ -174,10 +177,13 @@ test("timeline expand, escape, and per-turn hide flows @T0", async ({ page }) =>
 	}
 
 	// Esc collapses the focused expanded row (keyboard answer to the click).
-	const firstRowToggle = log.locator(".activity-row-toggle[aria-expanded='true']").first();
-	await firstRowToggle.focus();
-	await firstRowToggle.press("Escape");
-	await expect(firstRowToggle).toHaveAttribute("aria-expanded", "false");
+	const expandedRows = log.locator(".activity-row-toggle[aria-expanded='true']");
+	const expandedBeforeEsc = await expandedRows.count();
+	await expandedRows.first().focus();
+	await expandedRows.first().press("Escape");
+	// The locator re-resolves after the collapse — assert on the count, not on
+	// the same `.first()`, which now points at a different still-open row.
+	await expect(log.locator(".activity-row-toggle[aria-expanded='true']")).toHaveCount(expandedBeforeEsc - 1);
 
 	// Per-turn hide: the eye-off control on the accordion row.
 	await log.getByRole("button", { name: "Hide this turn's tool calls" }).click();
