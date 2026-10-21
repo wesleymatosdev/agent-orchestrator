@@ -1,136 +1,140 @@
 import type { AgentProfile } from "./agent-capabilities";
 
 export const AGENT_OPTIONS = [
-	"claude-code",
-	"codex",
-	"aider",
-	"opencode",
-	"opencode-v2",
-	"grok",
-	"droid",
-	"amp",
-	"agy",
-	"crush",
-	"cursor",
-	"qwen",
-	"gemini",
-	"copilot",
-	"goose",
-	"auggie",
-	"continue",
-	"devin",
-	"cline",
-	"kimi",
-	"muse",
-	"kiro",
-	"kilocode",
-	"vibe",
-	"pi",
-	"kimchi",
-	"prime-agent",
-	"autohand",
-	"omp",
-	"codewhale",
-	"fx",
-	"unreal-agent",
-	"mimo-code",
-	"deepseek-harness",
-	"openhands",
-	"command-code",
-	"hermes",
+  "claude-code",
+  "codex",
+  "aider",
+  "opencode",
+  "opencode-v2",
+  "grok",
+  "droid",
+  "amp",
+  "agy",
+  "crush",
+  "cursor",
+  "qwen",
+  "gemini",
+  "copilot",
+  "goose",
+  "auggie",
+  "continue",
+  "devin",
+  "cline",
+  "kimi",
+  "muse",
+  "kiro",
+  "kilocode",
+  "vibe",
+  "pi",
+  "kimchi",
+  "prime-agent",
+  "autohand",
+  "omp",
+  "codewhale",
+  "fx",
+  "unreal-agent",
+  "mimo-code",
+  "deepseek-harness",
+  "openhands",
+  "command-code",
+  "hermes",
+  "memcode",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
 export type AgentOption = AgentId;
 
 export type AgentIdentity = Pick<AgentProfile, "id" | "label"> & {
-	logoKey?: string;
-	initial: string;
+  logoKey?: string;
+  initial: string;
 };
 
 // "hermes" is a recognized harness identity (own brand mark, user-owned
 // install) but deliberately not in AGENT_OPTIONS: it is not an AO-installable
 // agent and must not appear in the switcher or installer lists.
 export const AGENT_LABELS: Record<AgentId | "hermes", string> = {
-	"claude-code": "Claude Code",
-	codex: "Codex",
-	aider: "Aider",
-	opencode: "OpenCode",
-	"opencode-v2": "OpenCode 2",
-	grok: "Grok",
-	droid: "Droid",
-	amp: "Amp",
-	agy: "AGY",
-	crush: "Crush",
-	cursor: "Cursor",
-	qwen: "Qwen",
-	gemini: "Gemini CLI",
-	copilot: "GitHub Copilot",
-	goose: "Goose",
-	auggie: "Auggie",
-	continue: "Continue",
-	devin: "Devin",
-	cline: "Cline",
-	kimi: "Kimi",
-	muse: "Muse",
-	kiro: "Kiro",
-	kilocode: "Kilo Code",
-	vibe: "Vibe",
-	pi: "Pi",
-	kimchi: "Kimchi",
-	"prime-agent": "Prime Agent",
-	autohand: "Autohand",
-	omp: "OMP",
-	codewhale: "Codewhale",
-	fx: "fx",
-	"unreal-agent": "Unreal Agent",
-	"mimo-code": "MiMo Code",
-	"deepseek-harness": "DeepSeek",
-	openhands: "OpenHands",
-	"command-code": "Command Code",
-	hermes: "Hermes",
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  aider: "Aider",
+  opencode: "OpenCode",
+  "opencode-v2": "OpenCode 2",
+  grok: "Grok",
+  droid: "Droid",
+  amp: "Amp",
+  agy: "AGY",
+  crush: "Crush",
+  cursor: "Cursor",
+  qwen: "Qwen",
+  gemini: "Gemini CLI",
+  copilot: "GitHub Copilot",
+  goose: "Goose",
+  auggie: "Auggie",
+  continue: "Continue",
+  devin: "Devin",
+  cline: "Cline",
+  kimi: "Kimi",
+  muse: "Muse",
+  kiro: "Kiro",
+  kilocode: "Kilo Code",
+  vibe: "Vibe",
+  pi: "Pi",
+  kimchi: "Kimchi",
+  "prime-agent": "Prime Agent",
+  autohand: "Autohand",
+  omp: "OMP",
+  codewhale: "Codewhale",
+  fx: "fx",
+  "unreal-agent": "Unreal Agent",
+  "mimo-code": "MiMo Code",
+  "deepseek-harness": "DeepSeek",
+  openhands: "OpenHands",
+  "command-code": "Command Code",
+  hermes: "Hermes",
+  memcode: "memcode",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(
-	AGENT_OPTIONS.map((id) => [
-		id,
-		{
-			id,
-			label: AGENT_LABELS[id],
-			logoKey: id,
-			initial: AGENT_LABELS[id].charAt(0).toUpperCase(),
-		},
-	]),
+  AGENT_OPTIONS.map((id) => [
+    id,
+    {
+      id,
+      label: AGENT_LABELS[id],
+      logoKey: id,
+      initial: AGENT_LABELS[id].charAt(0).toUpperCase(),
+    },
+  ]),
 );
 
 const identityAliases: Readonly<Record<string, AgentIdentity>> = {
-	claude: {
-		id: "claude",
-		label: "Claude",
-		logoKey: "claude",
-		initial: "C",
-	},
+  claude: {
+    id: "claude",
+    label: "Claude",
+    logoKey: "claude",
+    initial: "C",
+  },
 };
 
 export function getAgentIdentity(provider: string): AgentIdentity {
-	const identity = identityAliases[provider] ?? findAgentIdentity(provider);
-	if (identity) {
-		return identity;
-	}
-	return {
-		id: provider,
-		label: provider || "Unknown agent",
-		initial: provider.charAt(0).toUpperCase() || "?",
-	};
+  const identity = identityAliases[provider] ?? findAgentIdentity(provider);
+  if (identity) {
+    return identity;
+  }
+  return {
+    id: provider,
+    label: provider || "Unknown agent",
+    initial: provider.charAt(0).toUpperCase() || "?",
+  };
 }
 
 export function agentLabel(provider: string): string {
-	return provider in AGENT_LABELS ? AGENT_LABELS[provider as AgentId] : provider;
+  return provider in AGENT_LABELS
+    ? AGENT_LABELS[provider as AgentId]
+    : provider;
 }
 
 function findAgentIdentity(provider: string): AgentIdentity | undefined {
-	for (const id of AGENT_OPTIONS) {
-		if (id === provider) return AGENT_IDENTITIES.get(id);
-	}
-	return undefined;
+  for (const id of AGENT_OPTIONS) {
+    if (id === provider) return AGENT_IDENTITIES.get(id);
+  }
+  return undefined;
 }

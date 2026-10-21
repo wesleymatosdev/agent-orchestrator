@@ -124,10 +124,14 @@ function SessionRouteContent() {
 
 	switch (view.kind) {
 		case "screen":
-			return view.session.mode === "chat" ? (
-				<ChatSessionScreen session={view.session} />
-			) : (
-				<TerminalSessionScreen session={view.session} />
+			return (
+				<View style={styles.screen}>
+					{view.session.mode === "chat" ? (
+						<ChatSessionScreen session={view.session} />
+					) : (
+						<TerminalSessionScreen session={view.session} />
+					)}
+				</View>
 			);
 		case "loading":
 			return (
@@ -203,6 +207,7 @@ function SessionRouteContent() {
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	});
 

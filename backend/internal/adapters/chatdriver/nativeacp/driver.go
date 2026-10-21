@@ -57,6 +57,14 @@ type Config struct {
 	// owner's fixed policy: the agent offers exactly its current mode and
 	// refuses session/set_mode. See acpdriver.Config.SessionModesAdvisory.
 	SessionModesAdvisory bool
+	// LaunchSessionOptions, RequireAdvertisedOptions, and
+	// CloseSessionBeforeReload: see acpdriver.Config.
+	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
+	RequireAdvertisedOptions bool
+	CloseSessionBeforeReload bool
+	// ValidateInitialize optionally admits only the ACP agent and version the
+	// handshake identifies. See acpdriver.Config.ValidateInitialize.
+	ValidateInitialize func(acpsdk.InitializeResponse) error
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
@@ -68,6 +76,8 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// QuickStop: see acpdriver.Config.QuickStop.
+	QuickStop bool
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -154,6 +164,10 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		SessionMode:                  cfg.SessionMode,
 		SessionModesAdvisory:         cfg.SessionModesAdvisory,
 		SessionOptions:               cfg.SessionOptions,
+		LaunchSessionOptions:         cfg.LaunchSessionOptions,
+		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
+		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
+		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
@@ -161,5 +175,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
+		QuickStop:                    cfg.QuickStop,
 	}
 }
