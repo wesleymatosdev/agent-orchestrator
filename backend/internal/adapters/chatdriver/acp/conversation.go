@@ -751,8 +751,16 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.settlingTurn = ""
 	// A new AO-dispatched turn supersedes any earlier provider-initiated
 	// output: while the turn runs hibernation is blocked anyway, and its own
-	// completion is the fresh quiet reference afterwards.
+	// completion is the fresh quiet reference afterwards. A reentry turn that
+	// is still open loses the race (its terminal projection already released
+	// the controller or never landed); drop its bookkeeping so the timer
+	// cannot fire into this turn.
 	c.providerInitiatedOutputAt = time.Time{}
+	c.reentryTurn = ""
+	if c.reentrySettleTimer != nil {
+		c.reentrySettleTimer.Stop()
+		c.reentrySettleTimer = nil
+	}
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	sessionID := c.sessionID
@@ -1004,6 +1012,9 @@ func (c *conversation) finishReentryTurn(state domain.TurnState) {
 		c.activeTurn = ""
 		c.settlingTurn = ""
 		c.providerFailure = nil
+		// The adopted stream ended; the hibernation lease it armed ends with
+		// it. Fresh out-of-turn output re-arms both on its own.
+		c.providerInitiatedOutputAt = time.Time{}
 	}
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -1156,6 +1167,14 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 		c.mu.Unlock()
 		return ports.ErrChatNoActiveTurn
 	}
+	if active == c.reentryTurn {
+		// The open turn is provider-initiated work AO never dispatched, so
+		// there is no AO-owned prompt to cancel on the wire. Settle it locally
+		// as interrupted; the provider's own queue discipline governs the rest.
+		c.mu.Unlock()
+		c.finishReentryTurn(domain.TurnStateInterrupted)
+		return nil
+	}
 	if c.interrupt != nil {
 		c.mu.Unlock()
 		return fmt.Errorf("ACP session/cancel is already in progress")
@@ -1261,8 +1280,9 @@ func (c *conversation) Terminate() error {
 
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	c.mu.Lock()
-	reentry := !c.providerInitiatedOutputAt.IsZero() &&
-		time.Since(c.providerInitiatedOutputAt) < providerInitiatedQuietLimit
+	reentry := c.reentryTurn != "" ||
+		(!c.providerInitiatedOutputAt.IsZero() &&
+			time.Since(c.providerInitiatedOutputAt) < providerInitiatedQuietLimit)
 	id := c.sessionID
 	c.mu.Unlock()
 	if reentry {
@@ -1292,6 +1312,10 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.mu.Lock()
 		c.closed = true
 		close(c.closing)
+		if c.reentrySettleTimer != nil {
+			c.reentrySettleTimer.Stop()
+			c.reentrySettleTimer = nil
+		}
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel

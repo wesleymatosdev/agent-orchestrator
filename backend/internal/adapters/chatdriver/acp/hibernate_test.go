@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -89,13 +91,32 @@ func TestACPConversationDefersHibernationBehindProviderInitiatedOutput(t *testin
 	if err := conv.processUpdate(notification); err != nil {
 		t.Fatal(err)
 	}
-	if conv.providerInitiatedOutputAt.IsZero() {
-		t.Fatal("post-turn provider output did not arm the reentry lease")
+	conv.mu.Lock()
+	leased := !conv.providerInitiatedOutputAt.IsZero()
+	reentry := conv.reentryTurn
+	conv.mu.Unlock()
+	if !leased || reentry == "" {
+		t.Fatalf("post-turn provider output adopted=%q lease-armed=%v; want an open reentry turn", reentry, leased)
 	}
 	if canSleep, err := hibernator.CanHibernate(context.Background()); err != nil || canSleep {
 		t.Fatalf("CanHibernate right after provider-initiated output=%v, %v; want false", canSleep, err)
 	}
 
+	// The lease ends with the adopted turn: once the reentry stream settles,
+	// the session is hibernatable again without waiting out a timer.
+	conv.finishReentryTurn(domain.TurnStateCompleted)
+	if canSleep, err := hibernator.CanHibernate(context.Background()); err != nil || !canSleep {
+		t.Fatalf("CanHibernate after the reentry turn settled=%v, %v; want hibernatable", canSleep, err)
+	}
+
+	// Output that cannot be adopted (a dispatch pending when it arrives) still
+	// arms the quiet-time lease on its own.
+	conv.mu.Lock()
+	conv.providerInitiatedOutputAt = time.Now()
+	conv.mu.Unlock()
+	if canSleep, err := hibernator.CanHibernate(context.Background()); err != nil || canSleep {
+		t.Fatalf("CanHibernate with a fresh unadopted lease=%v, %v; want false", canSleep, err)
+	}
 	conv.mu.Lock()
 	conv.providerInitiatedOutputAt = time.Now().Add(-providerInitiatedQuietLimit)
 	conv.mu.Unlock()

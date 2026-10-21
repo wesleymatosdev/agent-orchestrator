@@ -383,6 +383,11 @@ func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {
 	}
 	select {
 	case event := <-conv.events:
+		// Out-of-turn live output first adopts a provider-initiated turn
+		// (issue #15); skip that lifecycle prefix to the content event.
+		for event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventControllerState {
+			event = <-conv.events
+		}
 		if event.Kind != ports.ChatEventMessageDelta || event.Delta != "after replay" {
 			t.Fatalf("live event = %+v", event)
 		}
