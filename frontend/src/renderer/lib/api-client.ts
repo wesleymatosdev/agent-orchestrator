@@ -116,6 +116,7 @@ const ROUTE_TEMPLATES = [
 "/api/v1/projects/clone",
 	"/api/v1/projects/clone/prepare",
 	"/api/v1/projects/clone/cleanup",
+	"/api/v1/projects/clone/progress",
 	"/api/v1/projects/initialize",
 	"/api/v1/projects/{id}",
 	"/api/v1/projects/{id}/config",

@@ -4468,6 +4468,25 @@ paths:
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
+  /api/v1/projects/clone/progress:
+    get:
+      operationId: streamCloneProgress
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/CloneProgressEvent'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream progress events for in-flight repository clones
+      tags:
+      - projects
   /api/v1/projects/initialize:
     post:
       operationId: initializeProjectRepository
@@ -14180,6 +14199,22 @@ components:
       - path
       - remoteUrl
       - preparationId
+      type: object
+    CloneProgressEvent:
+      properties:
+        message:
+          type: string
+        percent:
+          type:
+          - "null"
+          - number
+        remoteUrl:
+          type: string
+        stage:
+          type: string
+      required:
+      - remoteUrl
+      - stage
       type: object
     CloneProjectInput:
       properties:

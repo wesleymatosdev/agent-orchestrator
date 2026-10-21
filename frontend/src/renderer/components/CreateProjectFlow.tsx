@@ -37,7 +37,7 @@ import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
-import { usePreparedClone } from "../hooks/usePreparedClone";
+import { cloneFailureMessage, usePreparedClone, type CloneProgress } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -220,6 +220,7 @@ export function CreateProjectFlow({
 	const [isCreating, setIsCreating] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
+	const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
 	const [repositorySetupWarning, setRepositorySetupWarning] = useState<string | null>(null);
 	// A path that arrived via droppedPath, staged until the user confirms
@@ -571,10 +572,13 @@ export function CreateProjectFlow({
 		}
 		if (preparedClone.current() && !(await abandonPreparedClone())) return;
 		setError(null);
+		setCloneProgress(null);
 		setIsPreparingGit(true);
 		let clonedPath: string | null = null;
 		try {
-			const data = await preparedClone.prepare(next.remoteUrl, next.destinationParent);
+			const data = await preparedClone.prepare(next.remoteUrl, next.destinationParent, (progress) => {
+				setCloneProgress(progress.stage === "done" || progress.stage === "failed" ? null : progress);
+			});
 			clonedPath = data.path;
 			const validation = await validateImportFolder(data.path, "project", hostId);
 			setCloneDialogOpen(false);
@@ -596,19 +600,24 @@ export function CreateProjectFlow({
 			}
 			setSelectedPath(data.path);
 		} catch (err) {
-			reportProjectError(clonedPath
+			const reportError = clonedPath
 				? t("createProject.cloneValidationFailed", {
 					defaultValue: "AO cloned the repository but could not verify the checkout. Try again.",
 				})
-				: apiErrorCode(err) === "GIT_CLONE_FAILED"
-					? t("createProject.cloneFailedGuidance", {
-						defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
-					})
-					: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
+				: cloneFailureMessage(err,
+					apiErrorCode(err) === "GIT_CLONE_FAILED" || apiErrorCode(err) === "GIT_CLONE_CANCELLED"
+						? t("createProject.cloneFailedGuidance", {
+							defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
+						})
+						: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
+			// The daemon attaches a credential-redacted git stderr tail to clone
+			// failures; show it instead of leaving only the generic guidance.
+			reportProjectError(reportError);
 			if (clonedPath) await abandonPreparedClone();
 			setCloneDialogOpen(true);
 		} finally {
 			setIsPreparingGit(false);
+			setCloneProgress(null);
 		}
 	};
 
@@ -828,6 +837,7 @@ export function CreateProjectFlow({
 							onContinue={(next) => void prepareClone(next)}
 							onError={reportProjectError}
 							open={cloneDialogOpen && !settingsOpen}
+							progress={isPreparingGit ? cloneProgress : null}
 							shake={projectImportShake}
 							value={cloneDetails}
 						/>

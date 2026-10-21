@@ -45,6 +45,11 @@ type Manager interface {
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
+	// SubscribeCloneProgress streams live progress events for in-flight
+	// repository clones. Events are broadcast, not persisted, and carry the
+	// RemoteURL so a subscriber can ignore clones it did not start.
+	SubscribeCloneProgress(ctx context.Context) <-chan CloneProgressEvent
+
 	// InitializeRepository prepares a selected folder for project registration.
 	InitializeRepository(ctx context.Context, in InitializeRepositoryInput) (InitializeRepositoryResult, error)
 
@@ -82,6 +87,8 @@ type Service struct {
 	// covered by the store's own writeMu, so path/id conflict checks plus the
 	// subsequent mutation must be atomic from the perspective of concurrent callers.
 	addMu sync.Mutex
+	// cloneProgress broadcasts in-flight clone progress to SSE subscribers.
+	cloneProgress cloneProgressHub
 }
 
 const maxDisplayNameLen = 100

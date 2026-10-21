@@ -56,6 +56,11 @@ vi.mock("../lib/api-client", () => ({
 	},
 	apiErrorCode: (error: unknown) =>
 		typeof error === "object" && error !== null && "code" in error ? error.code : undefined,
+	apiErrorDetails: (error: unknown) => {
+		if (typeof error !== "object" || error === null) return undefined;
+		const details = (error as { details?: unknown }).details;
+		return typeof details === "object" && details !== null ? (details as Record<string, unknown>) : undefined;
+	},
 	apiErrorMessage: apiMocks.apiErrorMessage,
 }));
 
