@@ -1834,7 +1834,7 @@ func TestInterfaceTransitionTUIToChatUsesANewerIdleFactWithoutReadingTerminalOut
 	}
 }
 
-func TestInterfaceTransitionTUIToChatFailsClosedWhenStaleIdleCannotBeVerified(t *testing.T) {
+func TestInterfaceTransitionTUIToChatCompletesWhenStaleIdleStaysQuiet(t *testing.T) {
 	tests := []struct {
 		name                       string
 		agent                      ports.Agent
@@ -1890,15 +1890,11 @@ func TestInterfaceTransitionTUIToChatFailsClosedWhenStaleIdleCannotBeVerified(t 
 				t.Fatal(err)
 			}
 			settled := awaitTransition(t, store, transition.ID)
-			if settled.Phase != domain.SessionInterfaceTransitionFailed || settled.ErrorCode != "DRAIN_QUIESCENCE_UNVERIFIED" {
-				t.Fatalf("transition = %+v, want failed DRAIN_QUIESCENCE_UNVERIFIED", settled)
+			if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+				t.Fatalf("transition = %+v, want completed: sustained quiet is quiescence", settled)
 			}
-			if !strings.Contains(settled.ErrorDetail, "source interface was left untouched") ||
-				strings.Contains(settled.ErrorDetail, "session:") {
-				t.Fatalf("error detail = %q, want actionable user-facing source-preservation text", settled.ErrorDetail)
-			}
-			if runtime.destroyed != 0 {
-				t.Fatalf("source runtime destroyed %d times after unverified drain", runtime.destroyed)
+			if runtime.destroyed != 1 {
+				t.Fatalf("source runtime destroyed %d times, want exactly one settle-and-destroy", runtime.destroyed)
 			}
 			if tt.wantCaptures && runtime.outputCalls == 0 {
 				t.Fatal("terminal detector was not consulted")
@@ -1906,7 +1902,7 @@ func TestInterfaceTransitionTUIToChatFailsClosedWhenStaleIdleCannotBeVerified(t 
 			select {
 			case <-gate.released:
 			case <-time.After(time.Second):
-				t.Fatal("terminal input gate remained closed after drain failure")
+				t.Fatal("terminal input gate remained closed after the drain")
 			}
 		})
 	}
