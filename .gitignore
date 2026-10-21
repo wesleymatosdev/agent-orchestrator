@@ -100,3 +100,6 @@ e2e-artifacts/
 
 # Local pnpm artifacts
 pnpm-lock.yaml
+
+# Proof harness receipts (attachable artifacts, not committed files)
+.proof/
