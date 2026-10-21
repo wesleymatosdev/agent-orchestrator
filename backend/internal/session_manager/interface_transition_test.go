@@ -1904,6 +1904,57 @@ func TestInterfaceTransitionTUIToChatCompletesWhenStaleIdleStaysQuiet(t *testing
 	}
 }
 
+// TestInterfaceTransitionTUIToChatWaitsForBusySurfaceBeforeQuietSettle pins the
+// guard around the sustained-quiet rule (#14): a surface that still shows
+// active work blocks the settle even after the whole stale-idle budget has
+// elapsed with the durable state reading idle. The drain may complete only
+// once the work leaves the screen, and it must destroy the source exactly once
+// when it does.
+func TestInterfaceTransitionTUIToChatWaitsForBusySurfaceBeforeQuietSettle(t *testing.T) {
+	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
+	useFastInterfaceTransitionTimings(manager)
+	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
+	now := time.Now()
+	rec := store.sessions["session-1"]
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}
+	store.sessions["session-1"] = rec
+	runtime.aliveByHandle = map[string]bool{"runtime-1": true}
+	const busySamples = 200
+	runtime.outputForCall = func(call int) string {
+		if call <= busySamples {
+			return activeTerminalOutput
+		}
+		return idleTerminalOutput
+	}
+	gate := &transitionInputGate{
+		acquired:    make(chan string, 1),
+		released:    make(chan string, 1),
+		lastInputAt: now,
+	}
+	manager.SetTerminalInputGate(gate)
+
+	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := awaitTransition(t, store, transition.ID)
+	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("transition = %+v, want completed after the busy surface cleared", settled)
+	}
+	if runtime.styledOutputCalls <= busySamples {
+		t.Fatalf("styled output samples = %d, want more than %d: the drain settled while the surface still showed work",
+			runtime.styledOutputCalls, busySamples)
+	}
+	if runtime.destroyed != 1 {
+		t.Fatalf("source runtime destroyed %d times, want exactly one settle-and-destroy", runtime.destroyed)
+	}
+	select {
+	case <-gate.released:
+	case <-time.After(time.Second):
+		t.Fatal("terminal input gate remained closed after the drain")
+	}
+}
+
 func TestInterfaceTransitionTUIToChatFallsBackWhenStyledOutputIsUnavailable(t *testing.T) {
 	tests := []struct {
 		name         string
