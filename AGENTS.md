@@ -51,6 +51,7 @@ When showing or demoing frontend changes, run `ao preview [url]` from inside the
 - **AFTER finishing**, run `make proof` again (plus `make proof-ui` for renderer changes). It must be green before you hand off.
 - **Attach both receipt JSONs** (before and after) to the PR and the kanban task — they are the proof record.
 - **Fix loop**: edit → `make proof` → read the failing check's observed-vs-expected output → repeat, until green.
+- **Visual recording of your change**: when the work touches specific renderer flows, run `make proof-ui-trace ARGS="e2e/<spec>.spec.ts"` — those specs get a Playwright trace (step screenshots) attached to the run's receipt under `.proof/reports/<run-id>/traced-artifacts/`, green or red.
 
 ### Desktop lab (running the real Electron app for UI review)
 
