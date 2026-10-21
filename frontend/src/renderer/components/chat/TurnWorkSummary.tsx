@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { type ReactNode, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Eye } from "lucide-react";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "../ui/accordion";
 import { TurnDuration } from "./ChatTimelineItems";
 
@@ -56,5 +56,40 @@ export function TurnWorkSummary({
 				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} inline /> : null}
 			</span>
 		</div>
+	);
+}
+
+/**
+ * The collapsed form of a turn whose tool rows are hidden: "Worked for … · N
+ * tool calls". The whole row re-shows the hidden rows, so what hid them is one
+ * click away from undoing it — the affordance never has to be hunted for.
+ */
+export function TurnToolsHiddenRow({
+	durationMs,
+	count,
+	onShow,
+}: {
+	durationMs?: number;
+	count: number;
+	onShow: () => void;
+}) {
+	const { t } = useTranslation();
+	return (
+		<button
+			type="button"
+			onClick={onShow}
+			aria-expanded={false}
+			title="Show tool calls"
+			className="-mx-1 flex h-7 w-full min-w-0 select-none items-center gap-1.5 border-b border-border px-1 py-0 text-left text-sm font-normal text-muted-foreground transition-colors hover:text-foreground"
+		>
+			<span className="inline-flex w-fit shrink-0 items-center gap-1">
+				{t("chat.workedFor")}
+				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} inline /> : null}
+			</span>
+			<span className="truncate">
+				· {count} {count === 1 ? "tool call" : "tool calls"}
+			</span>
+			<Eye aria-hidden="true" className="size-3.5 shrink-0" />
+		</button>
 	);
 }
