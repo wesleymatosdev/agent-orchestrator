@@ -1133,7 +1133,9 @@ describe("ChatWorkspace timeline", () => {
 			"Run the unit tests",
 			"Working for",
 			"Starting with the test suite.",
-			"Ran command",
+			// The command row names the command itself; the generic "Ran command"
+			// label is gone.
+			"go test ./...",
 			"Only the unit ones, please",
 			"Switching to the unit tests.",
 		].map((fragment) => text.indexOf(fragment));
