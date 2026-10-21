@@ -17,8 +17,15 @@ const releaseMutationPatterns = [
 
 type WorkflowSource = { name: string; contents: string };
 
+// The fork publishes its own desktop releases (fork-release.yml) — upstream's
+// conductor boundary (private ao-releases repo) does not apply to this fork.
+// Every other workflow stays under the no-release-mutation rule.
+const forkReleaseWorkflow = "fork-release.yml";
+
 function findReleaseMutationViolations(workflows: WorkflowSource[]) {
-  return workflows.flatMap(({ name, contents }) => {
+  return workflows
+    .filter(({ name }) => name !== forkReleaseWorkflow)
+    .flatMap(({ name, contents }) => {
     const logicalCommands = contents.replace(/\\\r?\n[ \t]*/g, " ");
     const violations = releaseMutationPatterns
       .filter((pattern) => pattern.test(logicalCommands))
