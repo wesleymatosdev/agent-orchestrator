@@ -324,7 +324,12 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	var cwd string
 	var messages int
 	var children int
-	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
+	// Only children in the SAME workspace are history continuations (compaction
+	// forks). Hermes also spawns utility children with foreign cwds — AO's own
+	// background title generation runs under <data>/background-tasks/title… —
+	// and counting those refused every chat→TUI switch for any session that
+	// had ever generated a title.
+	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id AND COALESCE(child.cwd,'')=COALESCE(sessions.cwd,'')) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
 	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
 		return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")
 	}
