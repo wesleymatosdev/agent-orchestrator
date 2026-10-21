@@ -1,0 +1,110 @@
+# Fork release: on every update of plus/hermes-adapter, build all desktop
+# targets, generate electron-updater feeds, and publish a GitHub release so
+# installed fork builds auto-update. Unsigned (no Apple/Windows certs yet) —
+# wire signing into the publish step when credentials exist.
+name: Fork release
+
+on:
+  push:
+    branches: [plus/hermes-adapter]
+    paths-ignore: ["**.md", ".github/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Dispatch desktop build and wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          VERSION: 0.13.${{ github.run_number }}
+        run: |
+          gh workflow run build-artifacts.yml --ref plus/hermes-adapter -f ref="$SHA" -f version="$VERSION"
+          sleep 15
+          RUN_ID=$(gh run list --workflow build-artifacts.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+          echo "BUILD_RUN=$RUN_ID" >> "$GITHUB_ENV"
+          gh run watch "$RUN_ID" --exit-status --interval 60
+
+      - name: Download artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          for a in mac-arm64 mac-x64 win linux digests; do
+            gh run download "$BUILD_RUN" -n "$a" -D "dist/$a"
+          done
+          find dist -type f
+
+      - name: Generate electron-updater feeds
+        run: |
+          python3 - <<'PY'
+          import hashlib, base64, json, datetime, pathlib
+          dist = pathlib.Path("dist")
+
+          def sha512_b64(p):
+              return base64.b64encode(hashlib.sha512(p.read_bytes()).digest()).decode()
+
+          def sha256_hex(p):
+              return hashlib.sha256(p.read_bytes()).hexdigest()
+
+          now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+          feeds = {}
+          win = dist / "win" / "agent-orchestrator-win32-x64.exe"
+          feeds["latest.yml"] = {
+              "version": None, "files": [{"url": win.name, "sha512": sha512_b64(win)}],
+              "path": win.name, "sha512": sha512_b64(win), "releaseDate": now,
+          }
+          mac = dist / "mac-arm64" / "agent-orchestrator-darwin-arm64.zip"
+          feeds["latest-mac.yml"] = {
+              "version": None, "files": [{"url": mac.name, "sha512": sha512_b64(mac)}],
+              "path": mac.name, "sha512": sha512_b64(mac), "releaseDate": now,
+          }
+          # write simple YAML manually (no pyyaml on runner guarantee)
+          def write_yaml(path, body):
+              lines = [f"version: {body['version']}"]
+              lines.append("files:")
+              for f in body["files"]:
+                  lines.append(f"  - url: {f['url']}")
+                  lines.append(f"    sha512: {f['sha512']}")
+              lines.append(f"path: {body['path']}")
+              lines.append(f"sha512: {body['sha512']}")
+              lines.append(f"releaseDate: '{body['releaseDate']}'")
+              pathlib.Path(path).write_text("\n".join(lines) + "\n")
+          write_yaml("latest.yml", feeds["latest.yml"])
+          write_yaml("latest-mac.yml", feeds["latest-mac.yml"])
+          # collect digests for the release body
+          digests = {}
+          dp = dist / "digests" / "digests.json"
+          if dp.exists():
+              digests = json.loads(dp.read_text())
+          digests[mac.name] = sha256_hex(mac)
+          pathlib.Path("release-digests.json").write_text(json.dumps(digests, indent=2))
+          PY
+          VERSION="0.13.${{ github.run_number }}"
+          sed -i "s/^version: .*/version: $VERSION/" latest.yml latest-mac.yml
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: hermes-v0.13.${{ github.run_number }}
+          VERSION: 0.13.${{ github.run_number }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "Agent Orchestrator (hermes fork) $VERSION" --notes "Automated fork release from plus/hermes-adapter at ${GITHUB_SHA::10}. Unsigned builds; see the fork README for install caveats." --latest
+          gh release upload "$TAG" \
+            dist/mac-arm64/agent-orchestrator-darwin-arm64.zip \
+            dist/mac-x64/agent-orchestrator-darwin-x64.zip \
+            dist/win/agent-orchestrator-win32-x64.exe \
+            dist/linux/agent-orchestrator-linux-x64.AppImage \
+            latest.yml latest-mac.yml release-digests.json --clobber
