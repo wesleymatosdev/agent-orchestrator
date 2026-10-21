@@ -1117,7 +1117,9 @@ describe("ChatWorkspace timeline", () => {
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
 		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
 		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getAllByText("Ran command")).toHaveLength(2);
+		// Each row in the open run names its own command now.
+		expect(screen.getByText("go build ./...")).toBeInTheDocument();
+		expect(screen.getByText("go vet ./...")).toBeInTheDocument();
 	});
 
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {
