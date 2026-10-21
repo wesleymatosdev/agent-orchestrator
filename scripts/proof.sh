@@ -22,9 +22,15 @@ MODE="core"
 case "${1:-}" in
   "") ;;
   --full) MODE="full" ;;
-  --ui) MODE="ui" ;;
+  --ui)
+    MODE="ui"
+    shift
+    # Remaining args are optional spec paths/filters → they get a traced pass.
+    ;;
   -h|--help)
-    echo "usage: scripts/proof.sh [--full|--ui]"
+    echo "usage: scripts/proof.sh [--full | --ui [spec-filter...]]"
+    echo "  --ui                          full T0/P0 renderer navigation suite"
+    echo "  --ui e2e/chat-retry.spec.ts   additionally record traces of the given specs"
     exit 0
     ;;
   *)
@@ -141,6 +147,23 @@ if [ "$MODE" = "ui" ]; then
   UI_REPORT_DIR="$REPO_ROOT/.proof/reports/${RUN_ID}"
   mkdir -p "$UI_REPORT_DIR"
   run_check "e2e-typecheck" "npm" "cd frontend && npm run typecheck:e2e"
+
+  # Scoped traced pass: pass spec paths/filters after --ui (e.g.
+  #   scripts/proof.sh --ui e2e/chat-retry.spec.ts
+  #   make proof-ui ARGS="e2e/chat-retry.spec.ts"
+  # ) and exactly those specs are recorded with --trace on — the parts of the
+  # app your diff touches get a visual recording even when everything passes.
+  # Trace recording is ~2.5x slower per test, so it is scoped, never whole-suite.
+  UI_FILTERS=""
+  if [ "$#" -gt 0 ]; then
+    for f in "$@"; do UI_FILTERS="$UI_FILTERS $(printf '%q' "$f")"; done
+  fi
+  if [ -n "$UI_FILTERS" ]; then
+    # shellcheck disable=SC2086
+    run_check "renderer-nav-traced" "npx" \
+      "cd frontend && CI=true AO_E2E_PORT=5199 PLAYWRIGHT_HTML_OUTPUT_DIR='$UI_REPORT_DIR/html-traced' PLAYWRIGHT_HTML_OPEN=never npx playwright test$UI_FILTERS --grep \"@T0|@P0\" --trace on --reporter=line,html --output '$UI_REPORT_DIR/traced-artifacts'"
+  fi
+
   run_check "renderer-nav" "npx" \
     "cd frontend && CI=true AO_E2E_PORT=5199 PLAYWRIGHT_HTML_OUTPUT_DIR='$UI_REPORT_DIR/html' PLAYWRIGHT_HTML_OPEN=never npx playwright test --grep \"@T0|@P0\" --reporter=line,html --output '$UI_REPORT_DIR/artifacts'"
   NAV_STATUS="$(awk -F'\t' '$1=="renderer-nav"{s=$3} END{print s}' "$RESULTS_TSV")"
