@@ -1002,6 +1002,5 @@ describe("ReasoningBlock live transparency (issue #24)", () => {
     expect(screen.queryByText("reading the diff first")).toBeNull();
     // Nothing was persisted, because there is no conversation to key it on.
     expect(window.localStorage.length).toBe(0);
->>>>>>> e1ea2aaf02 (feat(chat): live thinking blocks collapse per conversation, default expanded)
   });
 });
