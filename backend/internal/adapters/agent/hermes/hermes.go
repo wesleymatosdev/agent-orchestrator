@@ -289,7 +289,38 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	observedPath := filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "observed-terminal")
+	dir := sessionDir(cfg.DataDir, cfg.Session.ID)
+	observedPath := filepath.Join(dir, "observed-terminal")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = db.Close() }()
+	var rowCwd string
+	var messages int
+	var children int
+	// Only children in the SAME workspace are history continuations (compaction
+	// forks). Hermes also spawns utility children with foreign cwds — AO's own
+	// background title generation runs under <data>/background-tasks/title… —
+	// and counting those refused every chat→TUI switch for any session that
+	// had ever generated a title.
+	rowErr := db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id AND COALESCE(child.cwd,'')=COALESCE(sessions.cwd,'')) FROM sessions WHERE id=?", id).Scan(&rowCwd, &messages, &children)
+	// Compaction moves history into a same-workspace fork chain, so the
+	// recorded id may be a drained parent whose children ARE the conversation
+	// continuing; a moved session also keeps its history under a live cwd
+	// that no longer matches AO's recorded workspace. Adopt the live head:
+	// descend to the most recent resumable leaf and restore that id in the
+	// live cwd instead of refusing drifted sessions. A dead end (no leaf, or
+	// an empty leaf) still refuses.
+	liveID, liveCwd, liveMessages := id, rowCwd, messages
+	chain := []string{id}
+	if rowErr == nil && (children != 0 || messages == 0) {
+		leafID, leafCwd, leafCount, leafChain, ok := liveForkLeaf(ctx, db, id)
+		if !ok {
+			return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")
+		}
+		liveID, liveCwd, liveMessages, chain = leafID, leafCwd, leafCount, leafChain
+	}
 	var crumbPath string
 	if observed, readErr := os.ReadFile(observedPath); readErr == nil {
 		crumbPath = strings.TrimSpace(string(observed))
@@ -304,6 +335,17 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 			return nil, false, fmt.Errorf("hermes: current terminal identity was not observed")
 		}
 		resolved, ok := darwinTerminalCrumb(home, cfg.Session.WorkspacePath, id)
+		if !ok && rowErr == nil {
+			// Compaction rotates the tty breadcrumb to the fork child and a
+			// cwd drift re-cwd's the session, so the current terminal
+			// identity may live under the live head instead of the
+			// recorded id and workspace.
+			for _, member := range chain {
+				if resolved, ok = darwinTerminalCrumb(home, liveCwd, member); ok {
+					break
+				}
+			}
+		}
 		if !ok {
 			return nil, false, fmt.Errorf("hermes: current terminal identity was not observed")
 		}
@@ -313,25 +355,43 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		}
 	}
 	crumb, err := readBreadcrumb(crumbPath)
-	if err != nil || crumb.SessionID != id {
+	// The breadcrumb is an identity proof, not history state: it must name a
+	// member of the conversation chain (the recorded id or an adopted live
+	// head). Anything else means the native terminal rotated to an unrelated
+	// conversation after observation.
+	known := map[string]bool{id: true}
+	for _, member := range chain {
+		known[member] = true
+	}
+	if err != nil || !known[crumb.SessionID] {
 		return nil, false, fmt.Errorf("hermes: native terminal rotated after observation; refusing stale restore")
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
-	if err != nil {
-		return nil, false, err
-	}
-	defer func() { _ = db.Close() }()
-	var cwd string
-	var messages int
-	var children int
-	// Only children in the SAME workspace are history continuations (compaction
-	// forks). Hermes also spawns utility children with foreign cwds — AO's own
-	// background title generation runs under <data>/background-tasks/title… —
-	// and counting those refused every chat→TUI switch for any session that
-	// had ever generated a title.
-	err = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id), (SELECT count(*) FROM sessions child WHERE child.parent_session_id=sessions.id AND COALESCE(child.cwd,'')=COALESCE(sessions.cwd,'')) FROM sessions WHERE id=?", id).Scan(&cwd, &messages, &children)
-	if err != nil || messages == 0 || children != 0 || filepath.Clean(cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
+	if rowErr != nil {
 		return nil, false, fmt.Errorf("hermes: native history missing, compressed, or workspace mismatch")
+	}
+	workspace := cfg.Session.WorkspacePath
+	cwdAdopted := filepath.Clean(liveCwd) != filepath.Clean(workspace)
+	if cwdAdopted {
+		// Adopt the live cwd: restoring into the old empty workspace would
+		// strand the conversation outside its own files.
+		workspace = liveCwd
+	}
+	if liveID != id || cwdAdopted {
+		// Persist the adoption so the next restore is consistent and the
+		// note is inspectable under the AO session dir.
+		var note strings.Builder
+		if liveID != id {
+			fmt.Fprintf(&note, "resumed at live head %s (%d messages since fork)\n", liveID, liveMessages)
+		}
+		if cwdAdopted {
+			fmt.Fprintf(&note, "adopted live cwd %s for restore\n", workspace)
+			if err := os.WriteFile(filepath.Join(dir, "native-workspace"), []byte(workspace), 0o600); err != nil {
+				return nil, false, err
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "live-head"), []byte(note.String()), 0o600); err != nil {
+			return nil, false, err
+		}
 	}
 	// Hermes retains a gateway session's launch policy on resume and
 	// rejects creation overrides ("Resume retains gateway session
@@ -340,11 +400,48 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	// own model; switch later with /model.
 	restoreConfig := cfg.Config
 	restoreConfig.Model = ""
-	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: cfg.DataDir, SessionID: cfg.Session.ID, WorkspacePath: cfg.Session.WorkspacePath, Config: restoreConfig, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
+	cmd, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: cfg.DataDir, SessionID: cfg.Session.ID, WorkspacePath: workspace, Config: restoreConfig, Permissions: cfg.Permissions, AllowedTools: cfg.AllowedTools, DisallowedTools: cfg.DisallowedTools})
 	if err != nil {
 		return nil, false, err
 	}
-	return append(cmd, "--resume", id), true, nil
+	return append(cmd, "--resume", liveID), true, nil
+}
+
+// liveForkLeaf descends the same-workspace compaction fork chain below start
+// to its most recent leaf, following parent_session_id with rowid as the
+// recency tiebreak, and verifies the leaf is resumable (has messages). It
+// returns the chain root→leaf so callers can accept the whole chain's
+// terminal identity; ok is false when the walk fails or ends on an empty
+// dead end, which keeps those sessions refused.
+func liveForkLeaf(ctx context.Context, db *sql.DB, start string) (leafID, leafCwd string, leafMessages int, chain []string, ok bool) {
+	current := start
+	chain = []string{start}
+	for depth := 0; depth < 64; depth++ {
+		var cwd string
+		var messages int
+		if err := db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id) FROM sessions WHERE id=?", current).Scan(&cwd, &messages); err != nil {
+			return "", "", 0, nil, false
+		}
+		var child string
+		err := db.QueryRowContext(ctx, "SELECT child.id FROM sessions child WHERE child.parent_session_id=? AND COALESCE(child.cwd,'')=COALESCE(?,'') ORDER BY child.rowid DESC LIMIT 1", current, cwd).Scan(&child)
+		switch {
+		case err == sql.ErrNoRows:
+			if messages == 0 {
+				return "", "", 0, nil, false
+			}
+			return current, cwd, messages, chain, true
+		case err != nil:
+			return "", "", 0, nil, false
+		}
+		for _, seen := range chain {
+			if seen == child {
+				return "", "", 0, nil, false
+			}
+		}
+		chain = append(chain, child)
+		current = child
+	}
+	return "", "", 0, nil, false
 }
 
 // NativeConversationID implements ports.AgentInterfaceHandoff: hermes' TUI and
