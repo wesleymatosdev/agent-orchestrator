@@ -86,7 +86,7 @@ func TestParseClaudeRetainsUnknownProviderUsageFieldsWithinTheBound(t *testing.T
 }
 
 // The transcript writes the same write-once column as the hook, so it earns the
-// same whitelist. A routing string AO cannot name is dropped rather than stored:
+// same allow list. A routing string AO cannot name is dropped rather than stored:
 // unattributed is repairable, and a wrong attribution — priced against nothing,
 // invisible to every repair path — is not.
 func TestParseClaudeProviderPrecedenceAndRetention(t *testing.T) {
@@ -102,7 +102,7 @@ func TestParseClaudeProviderPrecedenceAndRetention(t *testing.T) {
 	if len(result.Events) != 3 {
 		t.Fatalf("events = %+v", result.Events)
 	}
-	// The first two records name nothing AO recognises, so the whitelisted hook
+	// The first two records name nothing AO recognises, so the allow-listed hook
 	// hint stands. The third names a route AO does know, canonicalised, and it
 	// takes precedence and persists to the next chunk.
 	if result.Events[0].BillingProviderID != "anthropic" || result.Events[0].ModelID != "claude-a" ||

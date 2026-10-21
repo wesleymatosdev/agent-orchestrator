@@ -499,7 +499,7 @@ describe("telemetry sanitizers", () => {
 		expect(badSource).not.toHaveProperty("source");
 	});
 
-	it("keeps every whitelisted spawn source (the shared ORCHESTRATOR_SPAWN_SOURCES list)", async () => {
+	it("keeps every allow-listed spawn source (the shared ORCHESTRATOR_SPAWN_SOURCES list)", async () => {
 		for (const source of ORCHESTRATOR_SPAWN_SOURCES) {
 			const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
 				project_id: "demo-project",
@@ -569,7 +569,7 @@ describe("telemetry sanitizers", () => {
 		expect(Object.keys(props)).toEqual(["project_id_hash"]);
 	});
 
-	it("whitelists coarse daemon failure fields and drops messages", async () => {
+	it("allow lists coarse daemon failure fields and drops messages", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.daemon_failure", {
 			daemon_state: "error",
 			code: "spawn_failed",
@@ -580,7 +580,7 @@ describe("telemetry sanitizers", () => {
 		expect(props).toEqual({ daemon_state: "error", code: "spawn_failed", exit_code: 1, signal: "SIGKILL" });
 	});
 
-	it("whitelists normalized api_error fields", async () => {
+	it("allow lists normalized api_error fields", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.api_error", {
 			operation: "GET /api/v1/projects/:id",
 			error_category: "http_5xx",

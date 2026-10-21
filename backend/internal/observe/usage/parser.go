@@ -294,7 +294,7 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 			continue
 		}
 		// The transcript feeds the same write-once column as the hook, so it
-		// earns the same whitelist. An unrecognised string is dropped rather
+		// earns the same allow list. An unrecognised string is dropped rather
 		// than stored: unattributed is repairable, a wrong attribution is not.
 		nativeProvider := pricing.TrustedClaudeBillingProvider(
 			firstNonEmpty(native.Message.Provider, native.Provider))
