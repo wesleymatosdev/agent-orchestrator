@@ -29,7 +29,26 @@ const (
 	// terminated (quickSessionCloseWait for a QuickStop provider).
 	sessionCloseWait      = 2 * time.Second
 	quickSessionCloseWait = 500 * time.Millisecond
+	// providerInitiatedQuietLimit is how long CanHibernate refuses to stop a
+	// provider after it last produced output with no AO turn in flight. Detached
+	// provider work (a background subagent) re-enters the session as output
+	// after the turn that spawned it completed; stopping the process while that
+	// stream may still be flowing drops the result and parks the session
+	// forever. ACP has no "background work" verb to ask, so sustained
+	// observation is the proof — the same trade the drain quiescence check
+	// makes for TUI sources.
+	providerInitiatedQuietLimit = 5 * time.Minute
+	// reentryTurnIDPrefix names provider-initiated turns the conversation
+	// adopts when the provider resumes output with no AO turn in flight.
+	reentryTurnIDPrefix = "acp-reentry-turn:"
 )
+
+// reentrySettleDelay is how long the provider-initiated turn stays open after
+// its last out-of-turn output before AO settles it. ACP has no out-of-band
+// turn-completion notification - the provider only says something by saying
+// something - so a quiet window is the available end-of-work signal. Every
+// update re-arms it, so it only fires between updates.
+var reentrySettleDelay = 30 * time.Second
 
 var (
 	errConversationClosed = errors.New("ACP conversation closed")
@@ -159,6 +178,19 @@ type conversation struct {
 	// so a rejected or discarded turn leaves it armed for the next one.
 	preamble      []acpsdk.ContentBlock
 	preambleSpent bool
+
+	// providerInitiatedOutputAt records the last time the provider produced
+	// output while no AO turn was in flight — the ACP shape of detached work
+	// (for example a background subagent) re-entering the session. Hibernation
+	// must wait for it to go quiet; see CanHibernate.
+	providerInitiatedOutputAt time.Time
+	// reentryTurn is the provider-initiated turn adopted for out-of-turn
+	// provider output while it is in flight (issue #15). Empty when no
+	// reentry turn is open. See beginReentryTurn/finishReentryTurn.
+	reentryTurn string
+	// reentrySettleTimer settles the reentry turn once the provider's
+	// out-of-turn output has gone quiet for reentrySettleDelay.
+	reentrySettleTimer *time.Timer
 
 	contextTokens     int64
 	contextWindow     int64
@@ -717,6 +749,10 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	}
 	c.activeTurn = turn.id
 	c.settlingTurn = ""
+	// A new AO-dispatched turn supersedes any earlier provider-initiated
+	// output: while the turn runs hibernation is blocked anyway, and its own
+	// completion is the fresh quiet reference afterwards.
+	c.providerInitiatedOutputAt = time.Time{}
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	sessionID := c.sessionID
@@ -882,6 +918,92 @@ func (c *conversation) finishPrompt(
 		if c.interrupt == interrupt {
 			c.interrupt = nil
 		}
+	}
+	c.mu.Unlock()
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
+}
+
+// beginReentryTurn adopts provider output that arrives with no AO turn in
+// flight as a provider-initiated turn (issue #15). Hermes ends its ACP prompt
+// while its own background subagents still run; when a result re-enters, the
+// provider's continuation streams as plain session/update notifications with
+// no prompt outstanding. Without adoption those events carry an empty provider
+// turn, so nothing durable groups them and the session never shows the work.
+// The controller already adopts provider-started turns it did not dispatch, so
+// minting the turn here is enough for the output to land visibly. Returns ""
+// when adoption is not possible.
+func (c *conversation) beginReentryTurn() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.prepared != nil || c.activeTurn != "" || c.compactingTurnID != "" {
+		return ""
+	}
+	id := reentryTurnIDPrefix + uuid.NewString()
+	c.activeTurn = id
+	c.reentryTurn = id
+	c.settlingTurn = ""
+	c.messages = make(map[string]string)
+	c.thoughts = make(map[string]string)
+	c.nestedMessages = make(map[string]nestedMessageState)
+	c.tools = make(map[string]*toolState)
+	c.providerFailure = nil
+	c.providerInitiatedOutputAt = time.Now()
+	c.armReentrySettleLocked()
+	return id
+}
+
+// touchReentryTurn records continued out-of-turn output for the open reentry
+// turn, refreshing the hibernation lease and the quiet-settle timer.
+func (c *conversation) touchReentryTurn(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reentryTurn == "" || c.reentryTurn != turnID {
+		return
+	}
+	c.providerInitiatedOutputAt = time.Now()
+	c.armReentrySettleLocked()
+}
+
+// armReentrySettleLocked (re)starts the quiet timer that closes the reentry
+// turn. Callers hold c.mu.
+func (c *conversation) armReentrySettleLocked() {
+	if c.reentrySettleTimer != nil {
+		c.reentrySettleTimer.Stop()
+	}
+	c.reentrySettleTimer = time.AfterFunc(reentrySettleDelay, func() {
+		c.finishReentryTurn(domain.TurnStateCompleted)
+	})
+}
+
+// finishReentryTurn closes the provider-initiated turn: settles its open items,
+// emits the terminal lifecycle events and releases the turn. Mirrors
+// finishPrompt's ordering — completion before the turn is released, readiness
+// after — so a consumer reacting to ChatControllerReady can immediately send.
+func (c *conversation) finishReentryTurn(state domain.TurnState) {
+	c.mu.Lock()
+	if c.reentryTurn == "" || c.activeTurn != c.reentryTurn || c.prepared != nil || c.closed {
+		c.mu.Unlock()
+		return
+	}
+	turnID := c.reentryTurn
+	c.reentryTurn = ""
+	c.settlingTurn = turnID
+	if c.reentrySettleTimer != nil {
+		c.reentrySettleTimer.Stop()
+		c.reentrySettleTimer = nil
+	}
+	c.mu.Unlock()
+
+	c.settleOpenItems(turnID)
+	c.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turnID, TurnState: state,
+	})
+
+	c.mu.Lock()
+	if c.activeTurn == turnID {
+		c.activeTurn = ""
+		c.settlingTurn = ""
+		c.providerFailure = nil
 	}
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -1138,12 +1260,23 @@ func (c *conversation) Terminate() error {
 }
 
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	c.mu.Lock()
+	reentry := !c.providerInitiatedOutputAt.IsZero() &&
+		time.Since(c.providerInitiatedOutputAt) < providerInitiatedQuietLimit
+	id := c.sessionID
+	c.mu.Unlock()
+	if reentry {
+		// The provider recently produced output AO never dispatched. That is
+		// detached work re-entering the session (issue #15): stopping the
+		// process mid-flight would drop the result and park the session
+		// forever. Wait for the stream to go quiet instead. Codex proves the
+		// same property by asking its agent; ACP has no such verb, so the
+		// conversation's own observation is the proof.
+		return false, nil
+	}
 	if c.hibernationCheck == nil {
 		return true, nil
 	}
-	c.mu.Lock()
-	id := c.sessionID
-	c.mu.Unlock()
 	return c.hibernationCheck(ctx, c.conn, acpsdk.SessionId(id))
 }
 

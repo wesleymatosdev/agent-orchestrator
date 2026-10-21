@@ -612,6 +612,15 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		update.Plan != nil
 	if providerOutputResumed {
 		c.completeProviderFailure(turnID, emit)
+		if turnID == "" {
+			// Output with no AO turn in flight is provider-initiated work —
+			// the shape of a background subagent's result re-entering the
+			// session after the turn that spawned it ended. Remember when it
+			// last flowed: hibernating now would sever the delivery (#15).
+			c.mu.Lock()
+			c.providerInitiatedOutputAt = time.Now()
+			c.mu.Unlock()
+		}
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
