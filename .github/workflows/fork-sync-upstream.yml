@@ -1,0 +1,54 @@
+# Weekly sync of upstream main into plus/hermes-adapter. Opens (or updates) a
+# PR so the fork's CI gates the merge; auto-merge flips it green-side only.
+# Runs from the default branch (scheduled workflows only run there).
+name: Fork sync upstream
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plus/hermes-adapter
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: merge
+        run: |
+          git remote add upstream https://github.com/OrchestratorInc/agent-orchestrator.git
+          git fetch upstream main --tags --no-tags
+          git config user.name "wesleymatosdev"
+          git config user.email "wesleymatosdev@users.noreply.github.com"
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "upstream already contained in plus/hermes-adapter"
+          else
+            git merge upstream/main --no-edit || {
+              echo "CONFLICTS: resolve manually — upstream/main conflicts with plus/hermes-adapter" >&2
+              exit 1
+            }
+            git push origin HEAD:fork-sync/upstream-$(date +%Y%m%d)
+            echo "branch=fork-sync/upstream-$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open sync PR
+        if: steps.merge.outputs.up_to_date == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          gh pr create --base plus/hermes-adapter --head "$BRANCH" \
+            --title "Sync upstream main into plus/hermes-adapter" \
+            --body "Automated weekly merge of upstream main. CI gates this merge; auto-merge is enabled." \
+            --auto --merge || \
+          gh pr comment --head "$BRANCH" --body "Sync PR already open; auto-merge remains enabled."
