@@ -10,6 +10,9 @@ export default defineConfig({
 	testDir: "e2e",
 	use: {
 		baseURL: `http://127.0.0.1:${port}`,
+		// Every proof run records a screencast: interaction changes ship with
+		// video evidence (before/after tables reference these recordings).
+		video: "on",
 	},
 	webServer: {
 		// dev:web serves the renderer alone (VITE_NO_ELECTRON=1) — no Electron child to
