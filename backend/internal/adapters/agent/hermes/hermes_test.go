@@ -3,6 +3,7 @@ package hermes
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -313,5 +314,161 @@ func TestGetRestoreCommandIgnoresForeignWorkspaceChildren(t *testing.T) {
 	_, _, err = New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-titled", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "titled-conversation"}}})
 	if err == nil || !strings.Contains(err.Error(), "native history missing") {
 		t.Fatalf("same-workspace child must still refuse restore, got %v", err)
+	}
+}
+
+// restoreFixture prepares an AO session dir with a pre-observed terminal
+// crumb and a stubbed hermes binary — the common scaffolding of the restore
+// tests. The darwin crumb fallback is GOOS-gated, so tests pre-write
+// observed-terminal to exercise OS-independent rules.
+func restoreFixture(t *testing.T, aoSession, crumbSession, crumbCwd string) (data, home string) {
+	t.Helper()
+	data = t.TempDir()
+	home = t.TempDir()
+	dir := sessionDir(data, aoSession)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	crumbPath := filepath.Join(home, "terminal-sessions", "tty-dev-ttys010")
+	if err := os.MkdirAll(filepath.Dir(crumbPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	crumb := fmt.Sprintf(`{"session_id":%q,"cwd":%q,"ts":20}`, crumbSession, crumbCwd)
+	if err := os.WriteFile(crumbPath, []byte(crumb), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "observed-terminal"), []byte(crumbPath), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2+948'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	return data, home
+}
+
+// restoreDB creates the minimal native state.db schema used by the restore
+// tests and registers its cleanup.
+func restoreDB(t *testing.T, home string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(t.Context(), "CREATE TABLE sessions(id TEXT PRIMARY KEY, cwd TEXT, parent_session_id TEXT); CREATE TABLE messages(session_id TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+// Issue #22: a compacted session's same-workspace child chain IS the
+// conversation continuing — the restore must adopt the live leaf instead of
+// failing on drift, and persist the adoption for the next restore.
+func TestRestoreAdoptsCompactionForkLeaf(t *testing.T) {
+	workspace := "/workspace"
+	data, home := restoreFixture(t, "ao-fork", "fork-parent", workspace)
+	db := restoreDB(t, home)
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO sessions VALUES('fork-parent', ?, NULL);
+		INSERT INTO messages VALUES('fork-parent');
+		INSERT INTO messages VALUES('fork-parent');
+		INSERT INTO sessions VALUES('fork-child', ?, 'fork-parent');
+		INSERT INTO messages VALUES('fork-child')`, workspace, workspace); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-fork", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "fork-parent"}}})
+	if err != nil || !ok {
+		t.Fatalf("compacted session must restore at the leaf: ok=%v err=%v", ok, err)
+	}
+	if cmd[len(cmd)-2] != "--resume" || cmd[len(cmd)-1] != "fork-child" {
+		t.Fatalf("resume argv tail: %v", cmd)
+	}
+	note, readErr := os.ReadFile(filepath.Join(sessionDir(data, "ao-fork"), "live-head"))
+	if readErr != nil || !strings.Contains(string(note), "resumed at live head fork-child (1 messages since fork)") {
+		t.Fatalf("live-head note=%q err=%v", note, readErr)
+	}
+
+	// A crumb already rotated to the adopted leaf (compaction rewrites the
+	// tty breadcrumb) is the same terminal identity chain, not staleness.
+	data, home = restoreFixture(t, "ao-fork-rotated", "fork-child", workspace)
+	db = restoreDB(t, home)
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO sessions VALUES('fork-parent', ?, NULL);
+		INSERT INTO messages VALUES('fork-parent');
+		INSERT INTO sessions VALUES('fork-child', ?, 'fork-parent');
+		INSERT INTO messages VALUES('fork-child')`, workspace, workspace); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok, err = New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-fork-rotated", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "fork-parent"}}})
+	if err != nil || !ok {
+		t.Fatalf("leaf-rotated crumb must restore: ok=%v err=%v", ok, err)
+	}
+	if cmd[len(cmd)-1] != "fork-child" {
+		t.Fatalf("resume argv tail: %v", cmd)
+	}
+}
+
+func TestRestoreAdoptsDeepForkChainTip(t *testing.T) {
+	workspace := "/workspace"
+	data, home := restoreFixture(t, "ao-deep", "fork-root", workspace)
+	db := restoreDB(t, home)
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO sessions VALUES('fork-root', ?, NULL);
+		INSERT INTO messages VALUES('fork-root');
+		INSERT INTO sessions VALUES('fork-mid', ?, 'fork-root');
+		INSERT INTO sessions VALUES('fork-tip', ?, 'fork-mid');
+		INSERT INTO messages VALUES('fork-tip')`, workspace, workspace, workspace); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-deep", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "fork-root"}}})
+	if err != nil || !ok {
+		t.Fatalf("deep chain must restore at the tip: ok=%v err=%v", ok, err)
+	}
+	if cmd[len(cmd)-2] != "--resume" || cmd[len(cmd)-1] != "fork-tip" {
+		t.Fatalf("resume argv tail: %v", cmd)
+	}
+}
+
+func TestRestoreAdoptsLiveCwdOnDrift(t *testing.T) {
+	data, home := restoreFixture(t, "ao-drift", "drifted", "/elsewhere")
+	db := restoreDB(t, home)
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO sessions VALUES('drifted', '/elsewhere', NULL);
+		INSERT INTO messages VALUES('drifted');
+		INSERT INTO messages VALUES('drifted')`); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-drift", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "drifted"}}})
+	if err != nil || !ok {
+		t.Fatalf("cwd drift must adopt the live cwd: ok=%v err=%v", ok, err)
+	}
+	if cmd[3] != "--in" || cmd[4] != "/elsewhere" {
+		t.Fatalf("restore workspace argv: %v", cmd)
+	}
+	if cmd[len(cmd)-2] != "--resume" || cmd[len(cmd)-1] != "drifted" {
+		t.Fatalf("resume argv tail: %v", cmd)
+	}
+	dir := sessionDir(data, "ao-drift")
+	note, readErr := os.ReadFile(filepath.Join(dir, "live-head"))
+	if readErr != nil || !strings.Contains(string(note), "adopted live cwd /elsewhere for restore") {
+		t.Fatalf("live-head note=%q err=%v", note, readErr)
+	}
+	adopted, readErr := os.ReadFile(filepath.Join(dir, "native-workspace"))
+	if readErr != nil || string(adopted) != "/elsewhere" {
+		t.Fatalf("native-workspace=%q err=%v", adopted, readErr)
+	}
+}
+
+func TestRestoreStillRefusesEmptySessionWithoutLeaf(t *testing.T) {
+	workspace := "/workspace"
+	data, home := restoreFixture(t, "ao-empty", "empty-conversation", workspace)
+	db := restoreDB(t, home)
+	if _, err := db.ExecContext(t.Context(), "INSERT INTO sessions VALUES('empty-conversation', ?, NULL)", workspace); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-empty", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "empty-conversation"}}})
+	if err == nil || ok || !strings.Contains(err.Error(), "native history missing") {
+		t.Fatalf("empty session without leaf must refuse: ok=%v err=%v", ok, err)
 	}
 }
