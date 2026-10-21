@@ -277,6 +277,13 @@ func TestGetRestoreCommandIgnoresForeignWorkspaceChildren(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "observed-terminal"), []byte(crumbPath), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Stub the hermes binary: GetRestoreCommand resolves it on PATH after the
+	// children rule, and CI runners have no hermes install.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "hermes"), []byte("#!/bin/sh\necho 'Hermes Agent v0.22.2+948'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
 	crumbDir := filepath.Join(home, "terminal-sessions")
 	if err := os.MkdirAll(crumbDir, 0o700); err != nil {
 		t.Fatal(err)
