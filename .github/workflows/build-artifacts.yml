@@ -244,3 +244,5 @@ jobs:
           path: digests.json
           retention-days: 1
           if-no-files-found: error
+
+# registered for fork dispatch builds
