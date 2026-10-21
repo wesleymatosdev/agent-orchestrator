@@ -152,7 +152,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [lastUpdatedAt, setLastUpdatedAt] = useState<Partial<Record<AgentId, string>>>({});
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
-	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
+	// Keyed by string, not the generated install-target union: AgentId also
+	// covers harnesses with no install target (e.g. hermes), which must simply
+	// resolve to "no job" here.
+	const jobMap = useMemo(() => new Map<string, InstallJob>(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
 	// Install jobs are keyed by the daemon's install-target union, a subset of
 	// AgentId: agents without an install plan (e.g. hermes) never have a job,
 	// so the miss is the intended outcome.

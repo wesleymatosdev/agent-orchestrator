@@ -20508,7 +20508,16 @@ components:
         accountId:
           minLength: 1
           type: string
-
+        stopTurn:
+          type: boolean
+      required:
+      - accountId
+      type: object
+    SyncArtifactVersionsRequest:
+      properties:
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
           type: string
       required:
       - path

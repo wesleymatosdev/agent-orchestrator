@@ -7272,7 +7272,13 @@ export interface components {
             /** @description Review verdict: approved or changes_requested. */
             verdict: string;
         };
-
+        SwitchSessionAgentAccountRequest: {
+            accountId: string;
+            stopTurn?: boolean;
+        };
+        SyncArtifactVersionsRequest: {
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
         };
         SystemMemoryResponse: {
             /** @description What the kernel would hand out without swapping (MemAvailable). */

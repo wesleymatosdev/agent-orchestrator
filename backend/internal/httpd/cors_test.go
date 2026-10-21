@@ -3,6 +3,7 @@ package httpd
 import (
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -149,6 +150,9 @@ func TestCORS(t *testing.T) {
 }
 
 func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) {
+	if _, err := exec.LookPath("codex"); err != nil {
+		t.Skip("codex CLI not installed: the accounts controller answers from the real binary state and errors 500 instead of 501")
+	}
 	cfg := config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}
 	router := newTestRouter(cfg, discardLogger(), nil)
 
