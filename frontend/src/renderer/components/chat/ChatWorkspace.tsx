@@ -115,6 +115,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ConversationScope,
 	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
@@ -3999,7 +4000,8 @@ export function Timeline({
 								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
-								<TurnGroup
+								<ConversationScope conversationId={snapshot.conversationId}>
+									<TurnGroup
 									group={group}
 									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
 									onSelectAnnotation={selectAnnotation}
@@ -4043,6 +4045,7 @@ export function Timeline({
 									busy={busy}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</ConversationScope>
 							</div>
 						);
 					})}
