@@ -53,14 +53,14 @@ trap 'rm -f "$RESULTS_TSV"' EXIT
 
 START_EPOCH="$(date +%s)"
 
-# run_check <name> <command...>
+# run_check <name> <tool> <command...>
 # Runs the command, captures output, prints a PASS/FAIL line, appends a TSV row.
-# A check whose leading tool is missing on PATH is SKIP(reason), never a silent pass.
+# <tool> is the binary the check actually needs (NOT derived from the command
+# string — most checks start with `cd`, which is always on PATH). If that tool
+# is missing, the check is SKIP(tool not on PATH), never a silent pass.
 run_check() {
-  local name="$1"; shift
+  local name="$1" tool="$2"; shift 2
   local cmd_str="$*"
-  local tool
-  tool="${cmd_str%% *}"
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'SKIP  %-34s (%s not on PATH)\n' "$name" "$tool"
     printf '%s\t%s\tSKIP\t0\t0\n' "$name" "$cmd_str" >> "$RESULTS_TSV"
@@ -102,22 +102,22 @@ echo "----------------------------------------------------------------"
 
 # --- CORE tier: backend build-test job (go.yml) without -race, plus fast frontend checks ---
 if [ "$MODE" != "ui" ]; then
-  run_check "gofmt" \
+  run_check "gofmt" "gofmt" \
     "cd backend && test -z \"\$(gofmt -l .)\" || { echo 'These files need gofmt:'; gofmt -l .; exit 1; }"
-  run_check "go-build" "cd backend && go build ./..."
-  run_check "go-vet" "cd backend && go vet ./..."
+  run_check "go-build" "go" "cd backend && go build ./..."
+  run_check "go-vet" "go" "cd backend && go vet ./..."
   # -count=1 for determinism (no stale-cache pass); -short is honored by
   # backend/internal/browserruntime. CI's build-test job runs the same suite
   # with -race; that costs minutes locally, so it lives in the FULL tier.
-  run_check "go-test" "cd backend && go test -count=1 -short -timeout=15m ./..."
-  run_check "frontend-typecheck" "npm run frontend:typecheck"
-  run_check "product-ui-check" "npm run product-ui:check"
+  run_check "go-test" "go" "cd backend && go test -count=1 -short -timeout=15m ./..."
+  run_check "frontend-typecheck" "npm" "npm run frontend:typecheck"
+  run_check "product-ui-check" "npm" "npm run product-ui:check"
 fi
 
 # --- FULL tier: race suites + golangci-lint (mirror go.yml exactly) ---
 if [ "$MODE" = "full" ]; then
-  run_check "go-test-race" "cd backend && go test -race -count=1 -timeout=20m ./..."
-  run_check "golangci-lint" \
+  run_check "go-test-race" "go" "cd backend && go test -race -count=1 -timeout=20m ./..."
+  run_check "golangci-lint" "go" \
     "cd backend && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --path-mode=abs"
   # Env-dependent: the e2e gate needs Docker; report SKIP, never silently pass.
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -133,8 +133,8 @@ if [ "$MODE" = "ui" ]; then
   # Dedicated port + CI=true: CI disables reuseExistingServer, so if anything
   # already listens on the port the suite fails loudly instead of silently
   # testing ANOTHER worktree's dev:web renderer (see frontend/playwright.config.ts).
-  run_check "e2e-typecheck" "cd frontend && npm run typecheck:e2e"
-  run_check "renderer-nav" \
+  run_check "e2e-typecheck" "npm" "cd frontend && npm run typecheck:e2e"
+  run_check "renderer-nav" "npx" \
     "cd frontend && CI=true AO_E2E_PORT=5199 npx playwright test --grep \"@T0|@P0\" --reporter=line"
 fi
 
