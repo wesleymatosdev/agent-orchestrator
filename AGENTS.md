@@ -45,13 +45,13 @@ When showing or demoing frontend changes, run `ao preview [url]` from inside the
 
 ### Proof harness
 
-`make proof` (core tier, ~3 min), `make proof-full` (race suites + golangci-lint, slow), and `make proof-ui` (behavioral navigation proof, ~1 min) run `scripts/proof.sh`. Core mirrors CI's static checks; **proof-ui is the actual app proof**: Playwright boots the real renderer under `dev:web` and navigates it through the T0/P0 specs (`frontend/e2e/`), asserting flows work — not just that the code compiles. Every check prints PASS / FAIL / SKIP(reason) with observed-vs-expected output on failure, and each run writes a receipt JSON to `.proof/receipts/` (plus `.proof/latest.json`); receipts are gitignored attachable artifacts, not committed files.
+`npm run proof` (core tier, ~3 min), `npm run proof:full` (race suites + golangci-lint, slow), and `npm run proof:ui` (behavioral navigation proof, ~1 min) run `scripts/proof.sh`. Core mirrors CI's static checks; **proof:ui is the actual app proof**: Playwright boots the real renderer under `dev:web` and navigates it through the T0/P0 specs (`frontend/e2e/`), asserting flows work — not just that the code compiles. Every check prints PASS / FAIL / SKIP(reason) with observed-vs-expected output on failure, and each run writes a receipt JSON to `.proof/receipts/` (plus `.proof/latest.json`); receipts are gitignored attachable artifacts, not committed files.
 
-- **BEFORE starting work**, run `make proof` (and `make proof-ui` if the work touches the renderer). Expect a green baseline; if it is red for pre-existing base-branch reasons, keep the red receipt — do not fix unrelated debt.
-- **AFTER finishing**, run `make proof` again (plus `make proof-ui` for renderer changes). It must be green before you hand off.
+- **BEFORE starting work**, run `npm run proof` (and `npm run proof:ui` if the work touches the renderer). Expect a green baseline; if it is red for pre-existing base-branch reasons, keep the red receipt — do not fix unrelated debt.
+- **AFTER finishing**, run `npm run proof` again (plus `npm run proof:ui` for renderer changes). It must be green before you hand off.
 - **Attach both receipt JSONs** (before and after) to the PR and the kanban task — they are the proof record.
-- **Fix loop**: edit → `make proof` → read the failing check's observed-vs-expected output → repeat, until green.
-- **Visual recording of your change**: when the work touches specific renderer flows, run `make proof-ui-trace ARGS="e2e/<spec>.spec.ts"` — those specs get a Playwright trace (step screenshots) attached to the run's receipt under `.proof/reports/<run-id>/traced-artifacts/`, green or red.
+- **Fix loop**: edit → `npm run proof` → read the failing check's observed-vs-expected output → repeat, until green.
+- **Visual recording of your change**: when the work touches specific renderer flows, run `npm run proof:ui -- e2e/<spec>.spec.ts` — those specs get a Playwright trace (step screenshots) attached to the run's receipt under `.proof/reports/<run-id>/traced-artifacts/`, green or red.
 
 ### Desktop lab (running the real Electron app for UI review)
 
