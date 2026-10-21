@@ -79,7 +79,7 @@ export function TurnToolsHiddenRow({
 			type="button"
 			onClick={onShow}
 			aria-expanded={false}
-			title="Show tool calls"
+			title={t("chat.showToolCalls")}
 			className="-mx-1 flex h-7 w-full min-w-0 select-none items-center gap-1.5 border-b border-border px-1 py-0 text-left text-sm font-normal text-muted-foreground transition-colors hover:text-foreground"
 		>
 			<span className="inline-flex w-fit shrink-0 items-center gap-1">

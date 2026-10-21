@@ -3202,6 +3202,7 @@
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "工作用时",
+	"chat.showToolCalls": "显示工具调用",
 	"sideChat.deleteConfirm": "删除侧边聊天？",
 	"sideChat.deleteExplanation": "此侧边聊天及其消息将被删除。",
 	"sideChat.delete": "删除",
