@@ -218,6 +218,7 @@ func readTranscript(ctx context.Context, db *sql.DB, headID string, columns []st
 		names = append(names, column)
 		selected = append(selected, quoteIdent(column))
 	}
+	//nolint:gosec // column identifiers are code-owned and quoted via quoteIdent; values are parameterized
 	query := "SELECT rowid, " + strings.Join(selected, ", ") + " FROM messages WHERE session_id=?"
 	if hasColumn(columns, "active") {
 		query += " AND active=1"
@@ -389,6 +390,7 @@ func writeFork(ctx context.Context, db *sql.DB, headID, childID string, kept []t
 		names = append(names, column)
 		values = append(values, headValues[i])
 	}
+	//nolint:gosec // column identifiers are code-owned and quoted via quoteIdents; values are parameterized
 	insert := "INSERT INTO sessions (" + strings.Join(quoteIdents(names), ", ") + ") VALUES (" + strings.TrimSuffix(strings.Repeat("?, ", len(names)), ", ") + ")"
 	if _, err := tx.ExecContext(ctx, insert, values...); err != nil {
 		return fmt.Errorf("insert hermes fork session: %w", err)
@@ -397,6 +399,7 @@ func writeFork(ctx context.Context, db *sql.DB, headID, childID string, kept []t
 	for _, row := range kept {
 		columns := append([]string{"session_id"}, row.columns...)
 		vals := append([]any{childID}, row.values...)
+		//nolint:gosec // column identifiers are code-owned and quoted via quoteIdents; values are parameterized
 		insert := "INSERT INTO messages (" + strings.Join(quoteIdents(columns), ", ") + ") VALUES (" + strings.TrimSuffix(strings.Repeat("?, ", len(columns)), ", ") + ")"
 		if _, err := tx.ExecContext(ctx, insert, vals...); err != nil {
 			return fmt.Errorf("copy hermes transcript into fork: %w", err)
