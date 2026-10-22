@@ -757,11 +757,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				sendPending={commands.sendPending}
 				steerPending={commands.steerPending}
 				steerRefusal={commands.steerRefusal}
-				onPromoteQueuedTurn={
-					can(renderSnapshot, "steer") && !commands.steerUnsupported
-						? commands.promoteQueuedTurn
-						: undefined
-				}
+				// Steer on a queued card is interrupt-and-send — the shared cancel
+				// seam every chat driver has — so it is not gated on the mid-turn
+				// steer capability.
+				onPromoteQueuedTurn={commands.promoteQueuedTurn}
 				onEditQueuedTurn={commands.editQueuedTurn}
 				onCancelQueuedTurn={commands.cancelQueuedTurn}
 				onReorderQueuedTurns={commands.reorderQueuedTurns}

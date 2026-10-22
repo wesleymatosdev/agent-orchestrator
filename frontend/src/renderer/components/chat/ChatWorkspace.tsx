@@ -1471,8 +1471,10 @@ function ChatWorkspaceContent({
 			) : undefined,
 		[onResolveInput, stablePendingUserInput],
 	);
-	const canSteerQueuedMessage =
-		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
+	// Steer on a queued card is interrupt-and-send: it cuts the running turn and
+	// dispatches this message now. Every chat driver has the shared interrupt
+	// seam, so unlike mid-turn steering this is not capability-gated.
+	const canSteerQueuedMessage = Boolean(onSteer);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
