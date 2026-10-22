@@ -34,12 +34,12 @@ type hermesRollbackStore interface {
 // Non-hermes sessions answer handled=false so the ordinary controller rollback
 // serves them unchanged.
 func hermesRollbackRoute(
-	store hermesRollbackStore,
+	st hermesRollbackStore,
 	fork hermesRollbackForker,
 	log *slog.Logger,
 ) func(ctx context.Context, id domain.SessionID, turnID string) (int, bool, error) {
 	return func(ctx context.Context, id domain.SessionID, turnID string) (int, bool, error) {
-		rec, found, err := store.GetSession(ctx, id)
+		rec, found, err := st.GetSession(ctx, id)
 		if err != nil {
 			return 0, true, err
 		}
@@ -48,7 +48,7 @@ func hermesRollbackRoute(
 			return 0, false, nil
 		}
 
-		cutPrompt, turnsAfter, err := hermesRollbackCut(store, id, turnID)
+		cutPrompt, turnsAfter, err := hermesRollbackCut(st, id, turnID)
 		if err != nil {
 			return 0, true, err
 		}
@@ -77,12 +77,12 @@ func hermesRollbackRoute(
 // turn must exist on the conversation, carry a provider turn id, and still be
 // visible; its user prompt text is what the hermes adapter verifies against
 // the native transcript.
-func hermesRollbackCut(store hermesRollbackStore, id domain.SessionID, turnID string) (string, int, error) {
-	conversation, err := store.ConversationForSession(context.Background(), id)
+func hermesRollbackCut(st hermesRollbackStore, id domain.SessionID, turnID string) (string, int, error) {
+	conversation, err := st.ConversationForSession(context.Background(), id)
 	if err != nil {
 		return "", 0, fmt.Errorf("%w: %s has no conversation", chatsvc.ErrTurnNotRollbackable, id)
 	}
-	rows, err := store.LoadConversationSnapshot(context.Background(), conversation.ID)
+	rows, err := st.LoadConversationSnapshot(context.Background(), conversation.ID)
 	if err != nil {
 		return "", 0, err
 	}
