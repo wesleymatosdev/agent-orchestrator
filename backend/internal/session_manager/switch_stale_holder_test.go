@@ -48,8 +48,8 @@ func TestSwitchTUIProviderBusyRefusalNamesTheHolder(t *testing.T) {
 	m.agentOperations[rec.ID] = agentOperationHolder{kind: agentOperationExit, startedAt: base.Add(-2 * time.Minute)}
 
 	err := m.SwitchTUIProvider(context.Background(), rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex})
-	refusal, ok := err.(*domain.ProviderSwitchError)
-	if !ok || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+	var refusal *domain.ProviderSwitchError
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
 		t.Fatalf("error = %v, want a busy ProviderSwitchError", err)
 	}
 	if !strings.Contains(refusal.Detail, "exit") || !strings.Contains(refusal.Detail, "11:58:00") {
@@ -101,8 +101,8 @@ func TestBeginAgentOperationReapsOnlyTheStaleHolderItSaw(t *testing.T) {
 	live := agentOperationHolder{kind: agentOperationRestore, startedAt: base.Add(-30 * time.Second)}
 	m.agentOperations["s-1"] = live
 	err := m.beginAgentOperation(context.Background(), "s-1", agentOperationKill)
-	busy, ok := err.(*AgentOperationBusyError)
-	if !ok || busy.Kind != agentOperationRestore {
+	var busy *AgentOperationBusyError
+	if !errors.As(err, &busy) || busy.Kind != agentOperationRestore {
 		t.Fatalf("error = %v, want a busy error naming restore", err)
 	}
 	if !errors.Is(err, errAgentOperationInProgress) {
