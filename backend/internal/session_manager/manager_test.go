@@ -46,6 +46,10 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
+	rollbackTurnsErr       error
+	rollbackTurnsDiscarded int
+	rollbackTurns          []rollbackTurnsCall
+
 	cleanupMu    sync.Mutex
 	cleanupFacts map[domain.SessionID]domain.SessionCleanupRecord
 	// sessionsMu guards sessions: the interface-transition drain watchdog
@@ -328,9 +332,15 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	return true, nil
 }
 
-func (f *fakeStore) RollbackTurns(_ context.Context, _, _ string, _ time.Time) (int, error) {
-	return 0, errors.New("not implemented")
+func (f *fakeStore) RollbackTurns(_ context.Context, conversationID, turnID string, _ time.Time) (int, error) {
+	if f.rollbackTurnsErr != nil {
+		return 0, f.rollbackTurnsErr
+	}
+	f.rollbackTurns = append(f.rollbackTurns, rollbackTurnsCall{conversationID: conversationID, turnID: turnID})
+	return f.rollbackTurnsDiscarded, nil
 }
+
+type rollbackTurnsCall struct{ conversationID, turnID string }
 
 func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deletePrepErr != nil {
