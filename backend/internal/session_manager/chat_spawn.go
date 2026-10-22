@@ -50,6 +50,10 @@ type ChatLauncher interface {
 	HasLiveChatController(id domain.SessionID) bool
 	// StopChat releases a session's controller.
 	StopChat(ctx context.Context, id domain.SessionID) error
+	// HibernateChat parks a live chat session for idle: the controller stops,
+	// the durable hibernation marker is set, and the next message wakes the
+	// session through the ordinary resume path.
+	HibernateChat(ctx context.Context, id domain.SessionID) (bool, error)
 	// QueueChatPrompt records the opening prompt as a queued turn instead of
 	// sending it. An asynchronous spawn has no controller yet; DrainChatQueue
 	// delivers this turn, and anything the user typed after it, in order.

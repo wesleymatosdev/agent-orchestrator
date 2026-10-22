@@ -751,6 +751,10 @@ func (c *transitionChat) RelaySessionChatTurn(_ context.Context, _ domain.Sessio
 	return "", nil
 }
 func (*transitionChat) HasLiveChatController(domain.SessionID) bool { return false }
+func (c *transitionChat) HibernateChat(_ context.Context, _ domain.SessionID) (bool, error) {
+	return true, nil
+}
+
 func (c *transitionChat) StopChat(_ context.Context, _ domain.SessionID) error {
 	*c.log = append(*c.log, "stop:chat")
 	return nil

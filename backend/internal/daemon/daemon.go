@@ -565,6 +565,15 @@ func Run(buildVersion string) error {
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}
+	// hermes chat rollback (issue #25): the hermes harness cannot discard its
+	// transcript in place — its own rewind semantics are fork-at-point plus a
+	// new leaf. Route its rollbacks to the session manager's fork glue; every
+	// other harness falls through to the ordinary controller path unchanged.
+	if fork, ok := sessMgr.(interface {
+		RollbackHermesToFork(ctx context.Context, id domain.SessionID, turnID, cutPrompt string, turnsAfterInclusive int) (int, error)
+	}); ok {
+		chatSvc.SetRollbackHermes(hermesRollbackRoute(store, fork, log))
+	}
 	if wake, ok := sessMgr.(interface {
 		WakeHibernatedChat(context.Context, domain.SessionID) error
 	}); ok {

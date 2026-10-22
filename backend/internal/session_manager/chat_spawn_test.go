@@ -213,6 +213,10 @@ func (l *recordingLauncher) RelaySessionChatTurn(_ context.Context, _ domain.Ses
 	return "turn-relay", l.turnErr
 }
 
+func (l *recordingLauncher) HibernateChat(_ context.Context, _ domain.SessionID) (bool, error) {
+	return true, nil
+}
+
 func (l *recordingLauncher) StopChat(_ context.Context, id domain.SessionID) error { //nolint:unparam
 
 	l.stopped = append(l.stopped, id)
