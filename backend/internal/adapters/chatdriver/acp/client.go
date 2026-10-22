@@ -612,6 +612,32 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		update.Plan != nil
 	if providerOutputResumed {
 		c.completeProviderFailure(turnID, emit)
+		if turnID == "" {
+			// Output with no AO turn in flight is provider-initiated work —
+			// the shape of a background subagent's result re-entering the
+			// session after the turn that spawned it ended (issue #15).
+			// Adopt it as a provider-initiated turn so the continuation is
+			// attributed, delivered visibly, and blocks hibernation; the
+			// quiet timer in the conversation settles it when the stream
+			// goes quiet.
+			if id := c.beginReentryTurn(); id != "" {
+				emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
+				emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
+				turnID = id
+			} else {
+				// Adoption is impossible (a dispatch is pending, a compaction
+				// runs, ...), but the provider is still doing detached work:
+				// arm the quiet lease so hibernation waits anyway.
+				c.mu.Lock()
+				c.providerInitiatedOutputAt = time.Now()
+				c.mu.Unlock()
+			}
+		}
+	}
+	if turnID != "" {
+		// Continued output keeps an open reentry turn alive (hibernation lease
+		// and quiet-settle timer). A no-op for ordinary AO-dispatched turns.
+		c.touchReentryTurn(turnID)
 	}
 	switch {
 	case update.AgentMessageChunk != nil:

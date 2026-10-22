@@ -36,12 +36,28 @@ func messageChunk(text string) acpsdk.SessionNotification {
 	}
 }
 
+// nextContentEvent skips the provider-initiated turn lifecycle prefix that
+// out-of-turn updates now emit (issue #15): an idle conversation that receives
+// provider output first adopts a reentry turn, so TurnStarted/ControllerState
+// precede the content event.
+func nextContentEvent(t *testing.T, conv *conversation) ports.ChatEvent {
+	t.Helper()
+	for {
+		event := nextEvent(t, conv.Events())
+		switch event.Kind {
+		case ports.ChatEventTurnStarted, ports.ChatEventControllerState:
+			continue
+		}
+		return event
+	}
+}
+
 func TestNormalizeTextRewritesMessageDeltas(t *testing.T) {
 	conv := newNormalizationConversation(t)
 	if err := conv.processUpdate(messageChunk("🌐 Z.ai 内置工具：analyze_image / 输入：{}")); err != nil {
 		t.Fatalf("processUpdate: %v", err)
 	}
-	event := nextEvent(t, conv.Events())
+	event := nextContentEvent(t, conv)
 	if event.Kind != ports.ChatEventMessageDelta || event.Delta != "🌐 Z.ai built-in tool: analyze_image / input: {}" {
 		t.Fatalf("message delta = %#v", event)
 	}
@@ -58,7 +74,7 @@ func TestNormalizeTextRewritesThoughtDeltas(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("processUpdate: %v", err)
 	}
-	event := nextEvent(t, conv.Events())
+	event := nextContentEvent(t, conv)
 	if event.Kind != ports.ChatEventActivityStarted {
 		t.Fatalf("thought start = %#v", event)
 	}
@@ -80,7 +96,7 @@ func TestNormalizeTextRewritesToolCallTitles(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("tool start: %v", err)
 	}
-	started := nextEvent(t, conv.Events())
+	started := nextContentEvent(t, conv)
 	if started.Kind != ports.ChatEventActivityStarted || started.Summary != "🌐 Z.ai built-in tool: analyze_image" {
 		t.Fatalf("tool start = %#v", started)
 	}
@@ -133,7 +149,7 @@ func TestNormalizeTextNilMappingLeavesTextUntouched(t *testing.T) {
 	if err := conv.processUpdate(messageChunk("内置工具：raw")); err != nil {
 		t.Fatalf("processUpdate: %v", err)
 	}
-	event := nextEvent(t, conv.Events())
+	event := nextContentEvent(t, conv)
 	if event.Kind != ports.ChatEventMessageDelta || event.Delta != "内置工具：raw" {
 		t.Fatalf("message delta = %#v", event)
 	}
