@@ -3269,6 +3269,7 @@
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "Temps de travail",
+	"chat.showToolCalls": "Afficher les appels d'outils",
 	"sideChat.deleteConfirm": "Supprimer le chat latéral ?",
 	"sideChat.deleteExplanation": "Ce chat latéral et ses messages seront supprimés.",
 	"sideChat.delete": "Supprimer",

@@ -187,6 +187,11 @@ export type UiState = {
 	// session. Surfaces outside the session subtree (the notification runtime)
 	// need that distinction, and SessionView's own target is local state.
 	visibleTerminalKindBySession: Record<string, TerminalTarget["kind"]>;
+	// Turns whose settled tool rows the user hid, keyed `${sessionId}:${group.key}`.
+	// Hiding is deliberate, so it lives in the store — keyed per conversation,
+	// never re-guessed from what happened to be on screen after a reload — and
+	// the "N tool calls" summary stays as the collapsed form until it is undone.
+	timelineHiddenTurns: Record<string, true>;
 	setWorkbenchTab: (tab: WorkbenchTab) => void;
 	setThemePreference: (theme: ThemePreference) => void;
 	setThemeStyle: (style: ThemeStyle) => void;
@@ -241,6 +246,7 @@ export type UiState = {
 	requestCreateProjectFromPath: (path: string) => void;
 	requestNewShellTerminal: () => void;
 	setActiveShellTerminal: (handleId: string | null) => void;
+	setTurnToolsHidden: (key: string, hidden: boolean) => void;
 	setVisibleTerminalKind: (sessionId: string, kind: TerminalTarget["kind"]) => void;
 	clearVisibleTerminalKind: (sessionId: string) => void;
 };
@@ -365,6 +371,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 	newShellTerminalNonce: 0,
 	activeShellTerminalHandleId: null,
 	visibleTerminalKindBySession: {},
+	timelineHiddenTurns: {},
+	setTurnToolsHidden: (key, hidden) =>
+		set((state) => {
+			if (hidden) {
+				if (state.timelineHiddenTurns[key]) return state;
+				return { timelineHiddenTurns: { ...state.timelineHiddenTurns, [key]: true } };
+			}
+			if (!(key in state.timelineHiddenTurns)) return state;
+			const timelineHiddenTurns = { ...state.timelineHiddenTurns };
+			delete timelineHiddenTurns[key];
+			return { timelineHiddenTurns };
+		}),
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
 		if (get().themePreference === themePreference) return;

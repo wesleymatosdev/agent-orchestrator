@@ -207,7 +207,7 @@ beforeEach(() => {
 	renameSessionMock.mockReset().mockResolvedValue(undefined);
 	window.localStorage.clear();
 	setApiBaseUrl("http://127.0.0.1:3001");
-	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
+	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {}, timelineHiddenTurns: {} });
 });
 
 describe("ChatWorkspace prompt suggestions", () => {
@@ -5428,5 +5428,98 @@ describe("sent message recall", () => {
 		expect(composerText()).toBe("Beta ask");
 		expect(press("ArrowUp")).toBe(false);
 		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
+	});
+});
+
+describe("per-turn tool-row hiding", () => {
+	const at = "2026-08-11T10:01:00Z";
+	const snapshot: ConversationSnapshot = {
+		...chatFixtureEmpty,
+		latestSequence: 5,
+		turns: [
+			{
+				id: "turn-with-tools",
+				state: "completed",
+				requestedAt: at,
+				startedAt: at,
+				completedAt: "2026-08-11T10:01:04Z",
+			},
+		],
+		items: [
+			{
+				kind: "message", id: "prompt", turnId: "turn-with-tools", sequence: 1, revision: 0,
+				role: "user", origin: "human", text: "Check the build",
+				streaming: false, createdAt: at,
+			},
+			{
+				kind: "activity", id: "tool-1", turnId: "turn-with-tools", sequence: 2, revision: 0,
+				activityKind: "command", status: "completed", summary: "go test ./...",
+				detail: { command: "go test ./..." }, createdAt: at,
+			},
+			{
+				kind: "activity", id: "tool-2", turnId: "turn-with-tools", sequence: 3, revision: 0,
+				activityKind: "command", status: "completed", summary: "npm run build",
+				detail: { command: "npm run build" }, createdAt: at,
+			},
+			{
+				kind: "message", id: "answer", turnId: "turn-with-tools", sequence: 4, revision: 0,
+				role: "assistant", origin: "provider", text: "The build is green.",
+				streaming: false, createdAt: at,
+			},
+		],
+	};
+
+	it("hides a settled turn's tool rows behind the count, and re-shows them", async () => {
+		const user = userEvent.setup();
+		const { unmount } = render(<ChatWorkspace snapshot={snapshot} />);
+
+		const hide = screen.getByRole("button", { name: "Hide this turn's tool calls" });
+		await user.click(hide);
+
+		// The count is the collapsed form; the tool rows and the accordion are gone.
+		expect(screen.getByRole("button", { name: /2 tool calls/ })).toBeInTheDocument();
+		expect(screen.getByText("The build is green.")).toBeVisible();
+		expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
+		expect(screen.queryByText("npm run build")).not.toBeInTheDocument();
+
+		// Re-show: the same collapsed row undoes the hide.
+		await user.click(screen.getByRole("button", { name: /2 tool calls/ }));
+		expect(screen.getByRole("button", { name: "Hide this turn's tool calls" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+
+		unmount();
+	});
+
+	it("keeps a hidden turn hidden across a remount instead of re-guessing", async () => {
+		const user = userEvent.setup();
+		const first = render(<ChatWorkspace snapshot={snapshot} />);
+		await user.click(screen.getByRole("button", { name: "Hide this turn's tool calls" }));
+		first.unmount();
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByRole("button", { name: /2 tool calls/ })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Hide this turn's tool calls" })).not.toBeInTheDocument();
+	});
+
+	it("does not offer hiding on a turn without tool rows", () => {
+		const proseOnly: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 2,
+			turns: [{ id: "turn-prose", state: "completed", requestedAt: at, startedAt: at, completedAt: at }],
+			items: [
+				{
+					kind: "message", id: "ask", turnId: "turn-prose", sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Say something",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "message", id: "reply", turnId: "turn-prose", sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Something.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+		render(<ChatWorkspace snapshot={proseOnly} />);
+		expect(screen.queryByRole("button", { name: "Hide this turn's tool calls" })).not.toBeInTheDocument();
 	});
 });

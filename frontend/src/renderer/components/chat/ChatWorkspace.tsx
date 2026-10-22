@@ -1,4 +1,4 @@
-import { TurnWorkSummary } from "./TurnWorkSummary";
+import { TurnToolsHiddenRow, TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -35,7 +35,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, EyeOff, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
@@ -4287,6 +4287,14 @@ const TurnGroup = memo(function TurnGroup({
 	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
+	// Per-turn tool-row hiding: a settled turn's tool rows can be hidden entirely,
+	// leaving the count as the collapsed form. The choice is the user's, so it
+	// lives in the ui-store keyed by conversation — a remount restores it instead
+	// of re-guessing. A live turn ignores it: its rows are still being written.
+	const turnToolsKey = `${sessionId}:${group.key}`;
+	const storedToolsHidden = useUiStore((state) => Boolean(state.timelineHiddenTurns[turnToolsKey]));
+	const setTurnToolsHidden = useUiStore((state) => state.setTurnToolsHidden);
+	const toolsHidden = !group.live && storedToolsHidden;
 	const runs = useMemo(
 		() =>
 			runsOf(
@@ -4331,6 +4339,15 @@ const TurnGroup = memo(function TurnGroup({
 	// Questions, errors, and system warnings stay readable after the turn settles.
 	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
+	// Hiding targets tool rows only: a run counts as a tool row when any of its
+	// items is an activity, and its tool calls are what the count sums. Prose
+	// runs folded alongside them stay visible either way.
+	const toolRuns = foldedRuns.filter((run) => run.items.some((item) => item.kind === "activity"));
+	const proseRuns = foldedRuns.filter((run) => !run.items.some((item) => item.kind === "activity"));
+	const toolCallCount = toolRuns.reduce(
+		(count, run) => count + run.items.filter((item) => item.kind === "activity").length,
+		0,
+	);
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
 	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
 	useEffect(() => {
@@ -4414,17 +4431,41 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = showSettledStatus ? group.outcome : undefined;
 	if (!outcome) {
 		body.push(...workedRuns.map(renderRun));
+	} else if (toolsHidden && toolCallCount > 0) {
+		// Hidden: the "N tool calls" summary is the collapsed form — clicking it
+		// re-shows the rows. Prose folded alongside the tools stays readable.
+		body.push(
+			<TurnToolsHiddenRow
+				key="turn-worked-hidden"
+				durationMs={outcome.durationMs}
+				count={toolCallCount}
+				onShow={() => setTurnToolsHidden(turnToolsKey, false)}
+			/>,
+		);
+		if (proseRuns.length > 0) body.push(proseRuns.map(renderRun));
 	} else {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
-			<TurnWorkSummary
-				key="turn-worked"
-				durationMs={outcome.durationMs}
-				open={Boolean(activityDisclosureOverrides[disclosureKey])}
-				onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
-			>
-				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
-			</TurnWorkSummary>,
+			<div key="turn-worked" className="group/turn-tools relative">
+				<TurnWorkSummary
+					durationMs={outcome.durationMs}
+					open={Boolean(activityDisclosureOverrides[disclosureKey])}
+					onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
+				>
+					{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
+				</TurnWorkSummary>
+				{toolCallCount > 0 ? (
+					<button
+						type="button"
+						onClick={() => setTurnToolsHidden(turnToolsKey, true)}
+						aria-label="Hide this turn's tool calls"
+						title="Hide tool calls"
+						className="absolute right-0 top-0 flex h-7 items-center rounded px-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-interactive-hover hover:text-foreground focus-visible:opacity-100 group-hover/turn-tools:opacity-100"
+					>
+						<EyeOff aria-hidden="true" className="size-3" />
+					</button>
+				) : null}
+			</div>,
 		);
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));

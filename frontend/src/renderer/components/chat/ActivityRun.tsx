@@ -90,6 +90,13 @@ export function ActivityRun({
 		>
 			<button
 				type="button"
+				onKeyDown={(event) => {
+					// Esc collapses the run under focus, mirroring the row behavior.
+					if (event.key === "Escape" && open) {
+						event.stopPropagation();
+						updateOverride(disclosureKey ?? "", false);
+					}
+				}}
 				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
@@ -243,6 +250,13 @@ function ActivitySubgroup({
 		<div className="activity-subgroup">
 			<button
 				type="button"
+				onKeyDown={(event) => {
+					// Esc collapses the subgroup under focus, mirroring the run.
+					if (event.key === "Escape" && open) {
+						event.stopPropagation();
+						updateOverride(false);
+					}
+				}}
 				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
