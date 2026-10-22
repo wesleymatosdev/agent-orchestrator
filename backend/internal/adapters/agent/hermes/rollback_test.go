@@ -102,14 +102,11 @@ func TestForkAtCutKeepsPrefixDropsTail(t *testing.T) {
 	f.addMessage("head", "assistant", "third answer")
 
 	// Cut at the second user turn: that turn and the third go away.
-	fork, err := New().ForkAtCut(context.Background(), f.dataDir, f.jobID, "head", "second ask", 2)
+	child, err := New().ForkAtCut(context.Background(), f.dataDir, f.jobID, "head", "second ask", 2)
 	if err != nil {
 		t.Fatalf("ForkAtCut: %v", err)
 	}
-	if fork.HeadID != "head" || fork.DroppedTurns != 2 {
-		t.Fatalf("unexpected fork %+v", fork)
-	}
-	kept := f.messages(fork.ChildID)
+	kept := f.messages(child)
 	want := []string{"user:first ask", "assistant:first answer"}
 	if len(kept) != len(want) {
 		t.Fatalf("child transcript = %v, want %v", kept, want)
@@ -122,7 +119,7 @@ func TestForkAtCutKeepsPrefixDropsTail(t *testing.T) {
 	var parent string
 	var count int
 	if err := f.db.QueryRow(
-		"SELECT COALESCE(parent_session_id,''), message_count FROM sessions WHERE id=?", fork.ChildID,
+		"SELECT COALESCE(parent_session_id,''), message_count FROM sessions WHERE id=?", child,
 	).Scan(&parent, &count); err != nil {
 		t.Fatal(err)
 	}
@@ -148,15 +145,21 @@ func TestForkAtCutAfterCompactionLandsOnLiveLeaf(t *testing.T) {
 	f.addMessage("leaf", "assistant", "post-compaction answer")
 	f.addMessage("leaf", "user", "post-compaction second ask")
 
-	fork, err := New().ForkAtCut(context.Background(), f.dataDir, f.jobID, "recorded",
+	child, err := New().ForkAtCut(context.Background(), f.dataDir, f.jobID, "recorded",
 		"post-compaction second ask", 1)
 	if err != nil {
 		t.Fatalf("ForkAtCut: %v", err)
 	}
-	if fork.HeadID != "leaf" {
-		t.Fatalf("fork head = %q, want the live leaf", fork.HeadID)
+	var parent string
+	if err := f.db.QueryRow(
+		"SELECT COALESCE(parent_session_id,'') FROM sessions WHERE id=?", child,
+	).Scan(&parent); err != nil {
+		t.Fatal(err)
 	}
-	kept := f.messages(fork.ChildID)
+	if parent != "leaf" {
+		t.Fatalf("fork branched from %q, want the live leaf", parent)
+	}
+	kept := f.messages(child)
 	want := []string{
 		"user:summary of earlier turns\n\npost-compaction first ask",
 		"assistant:post-compaction answer",
