@@ -92,8 +92,8 @@ func TestRollbackHermesToForkForksDiscardsAndRePoints(t *testing.T) {
 	}
 }
 
-func TestRollbackHermesToForkHibernatesALiveController(t *testing.T) {
-	m, _, _ := rollbackFixture(t, nil)
+func TestRollbackHermesToForkParksALiveController(t *testing.T) {
+	m, _, fork := rollbackFixture(t, nil)
 	hibernator := &recordingHibernator{recordingLauncher: &recordingLauncher{live: true}}
 	m.chat = hibernator
 
@@ -103,7 +103,34 @@ func TestRollbackHermesToForkHibernatesALiveController(t *testing.T) {
 	if len(hibernator.calls) != 1 || hibernator.calls[0] != domain.SessionID("mer-1") {
 		t.Fatalf("hibernated %v, want [mer-1]", hibernator.calls)
 	}
+	if fork.gotTurnsAfter != 1 {
+		t.Fatalf("fork ran with turnsAfter=%d; want the park to precede it", fork.gotTurnsAfter)
+	}
 }
+
+func TestRollbackHermesToForkRefusesWhenTheHostSurvivesParking(t *testing.T) {
+	m, _, fork := rollbackFixture(t, nil)
+	hibernator := &recordingHibernator{recordingLauncher: &recordingLauncher{live: true}}
+	m.chat = hibernator
+	// A launcher whose controller stays live after the park: work in flight
+	// kept the host running, so the fork must not proceed.
+	m.chat = &hostAliveLauncher{hibernator}
+
+	_, err := m.RollbackHermesToFork(context.Background(), "mer-1", "turn-9", "ask", 1)
+	if !errors.Is(err, ErrRollbackHostAlive) {
+		t.Fatalf("err = %v, want ErrRollbackHostAlive", err)
+	}
+	if fork.gotTurnsAfter != 0 {
+		t.Fatal("the fork must not run while the host is alive")
+	}
+}
+
+// hostAliveLauncher keeps reporting a live controller after hibernation.
+type hostAliveLauncher struct {
+	*recordingHibernator
+}
+
+func (l *hostAliveLauncher) HasLiveChatController(domain.SessionID) bool { return true }
 
 func TestRollbackHermesToForkRefusesNonHermesAndBusySessions(t *testing.T) {
 	for name, mutate := range map[string]func(*domain.SessionRecord){

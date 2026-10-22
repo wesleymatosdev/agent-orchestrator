@@ -749,7 +749,7 @@ func (c *transitionChat) RelaySessionChatTurn(_ context.Context, _ domain.Sessio
 	return "", nil
 }
 func (*transitionChat) HasLiveChatController(domain.SessionID) bool { return false }
-func (c *transitionChat) HibernateChat(_ context.Context, _ domain.SessionID) (bool, error) {
+func (c *transitionChat) HibernateChatForUpdate(_ context.Context, _ domain.SessionID) (bool, error) {
 	return true, nil
 }
 

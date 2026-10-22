@@ -19,8 +19,8 @@ func (l integrationChatLauncher) SupportsChat(harness domain.AgentHarness) bool 
 	return l.service.SupportsChat(harness)
 }
 
-func (l integrationChatLauncher) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
-	return l.service.HibernateChat(ctx, id)
+func (l integrationChatLauncher) HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error) {
+	return l.service.HibernateChatForUpdate(ctx, id)
 }
 
 func (l integrationChatLauncher) PreflightChat(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode) error {

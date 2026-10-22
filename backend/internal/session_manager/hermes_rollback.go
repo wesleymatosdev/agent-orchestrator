@@ -30,6 +30,11 @@ var (
 	// ErrRollbackUnavailable reports the daemon was wired without the hermes
 	// fork capability.
 	ErrRollbackUnavailable = errors.New("hermes rollback: adapter capability is not wired")
+	// ErrRollbackHostAlive reports the live provider host could not be parked:
+	// hibernating it found work in flight (a queued message, a pending
+	// approval, background work), so forking under it would race a writer and
+	// leave its warm memory describing the pre-rollback conversation.
+	ErrRollbackHostAlive = errors.New("hermes rollback: the provider host is still running")
 )
 
 // rollbackConversationStore is the narrow read the rollback needs to find the
@@ -86,14 +91,26 @@ func (m *Manager) RollbackHermesToFork(
 	}
 
 	// A live controller still holds the old conversation in memory, and its
-	// host process is a concurrent writer on the native store. Hibernate it
-	// first: the controller stops, the host drains, and the next message wakes
-	// the session through the ordinary hibernation path — on the new leaf,
-	// because the recorded provider identity below now names it.
+	// host process is a concurrent writer on the native store. Park it first,
+	// unconditionally: the controller stops, the host shuts down, and the
+	// durable hibernation marker makes the next message wake the session
+	// through the ordinary resume path — on the new leaf, because the recorded
+	// provider identity below now names it. The recheck is the contract: a
+	// hibernation that found work in flight did NOT stop the host, and forking
+	// under it would race a writer and orphan its warm context.
 	live := m.chat != nil && m.chat.HasLiveChatController(id)
 	if live {
-		if _, err := m.chat.HibernateChat(ctx, id); err != nil {
-			return 0, fmt.Errorf("hermes rollback %s: stop the live controller: %w", id, err)
+		hibernator, canHibernate := m.chat.(interface {
+			HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error)
+		})
+		if !canHibernate {
+			return 0, fmt.Errorf("hermes rollback %s: %w (chat launcher cannot park the host)", id, ErrRollbackHostAlive)
+		}
+		if _, err := hibernator.HibernateChatForUpdate(ctx, id); err != nil {
+			return 0, fmt.Errorf("hermes rollback %s: park the live host: %w", id, err)
+		}
+		if m.chat.HasLiveChatController(id) {
+			return 0, fmt.Errorf("hermes rollback %s: %w (work in flight kept it running)", id, ErrRollbackHostAlive)
 		}
 	}
 
