@@ -115,6 +115,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ConversationScope,
 	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
@@ -2094,8 +2095,6 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     recorded by an older build whose usage rows are still on disk. Rendering one
  *     row per report is what buried the actual conversation; it lives in the
  *     header meter instead.
- *   - reasoning. Providers can emit one per tool call and they usually carry no
- *     readable body, so they are internal signal rather than conversation chrome.
  *
  *   - a plan row whose turn already carries the plan. The daemon writes both, from
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
@@ -2104,6 +2103,9 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
+ * Reasoning is kept too (issue #24): the daemon streams it live and the block
+ * collapses per conversation, so hiding it is the reader's opt-out rather than a
+ * default here. Rows with no readable body render nothing on their own.
  */
 function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 	const plannedTurns = new Set(
@@ -2118,7 +2120,6 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
-		if (item.activityKind === "reasoning") return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -3999,7 +4000,8 @@ export function Timeline({
 								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
-								<TurnGroup
+								<ConversationScope conversationId={snapshot.conversationId}>
+									<TurnGroup
 									group={group}
 									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
 									onSelectAnnotation={selectAnnotation}
@@ -4043,6 +4045,7 @@ export function Timeline({
 									busy={busy}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</ConversationScope>
 							</div>
 						);
 					})}
