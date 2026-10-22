@@ -99,6 +99,8 @@ type recordingLauncher struct {
 	queueErr error
 	drainErr error
 	drained  []domain.SessionID
+
+	hibernated []domain.SessionID
 }
 
 func (l *recordingLauncher) QueueChatPrompt(_ context.Context, _ domain.SessionID, text string) (string, error) {
@@ -211,6 +213,16 @@ func (l *recordingLauncher) RelaySessionChatTurn(_ context.Context, _ domain.Ses
 	l.relayIDs = append(l.relayIDs, clientMessageID)
 	l.relayOptions = append(l.relayOptions, options)
 	return "turn-relay", l.turnErr
+}
+
+func (l *recordingLauncher) HibernateChat(_ context.Context, _ domain.SessionID) (bool, error) {
+	return true, nil
+}
+
+func (l *recordingLauncher) HibernateChatForUpdate(_ context.Context, id domain.SessionID) (bool, error) {
+	l.stopped = append(l.stopped, id)
+	l.hibernated = append(l.hibernated, id)
+	return true, nil
 }
 
 func (l *recordingLauncher) StopChat(_ context.Context, id domain.SessionID) error { //nolint:unparam
@@ -789,8 +801,13 @@ type recordingHibernator struct {
 	calls []domain.SessionID
 }
 
-func (h *recordingHibernator) HibernateChat(_ context.Context, id domain.SessionID) (bool, error) {
+func (h *recordingHibernator) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
+	return h.HibernateChatForUpdate(ctx, id)
+}
+
+func (h *recordingHibernator) HibernateChatForUpdate(_ context.Context, id domain.SessionID) (bool, error) {
 	h.calls = append(h.calls, id)
+	h.live = false
 	return true, nil
 }
 

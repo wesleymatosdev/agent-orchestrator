@@ -347,6 +347,10 @@ type Store interface {
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
+	// RollbackTurns records that a rollback discarded the named turn and
+	// everything after it on the conversation. The production chat store
+	// implements it; the rollback glue in this package is the second caller.
+	RollbackTurns(ctx context.Context, conversationID, turnID string, now time.Time) (int, error)
 }
 
 // conversationSettingsStore is the narrow optional read boundary for deriving
@@ -392,6 +396,7 @@ type Manager struct {
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
+	hermesFork                  HermesForker
 	runFilePath                 string
 	clock                       func() time.Time
 	reconcileWorkers            int
@@ -757,6 +762,9 @@ type Deps struct {
 	Preview             PreviewLifecycle
 	Browser             BrowserLifecycle
 	BrowserCapabilities BrowserCapabilityIssuer
+	// HermesFork supplies the hermes adapter's fork-at-point (rollback)
+	// capability. Nil leaves hermes chat rollbacks unsupported.
+	HermesFork HermesForker
 	// DataDir owns durable attachment storage and is exported to spawned agents
 	// as AO_DATA_DIR so their hook commands can open the same store.
 	DataDir string
@@ -825,6 +833,7 @@ func New(d Deps) *Manager {
 		attachments:                    attachmentstore.New(d.DataDir),
 		attachmentSuffix:               randomSuffix,
 		dataDir:                        d.DataDir,
+		hermesFork:                     d.HermesFork,
 		runFilePath:                    strings.TrimSpace(d.RunFilePath),
 		clock:                          d.Clock,
 		reconcileWorkers:               d.ReconcileWorkers,

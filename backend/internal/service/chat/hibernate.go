@@ -27,6 +27,13 @@ type hibernationTurnReader interface {
 	LatestVisibleUserTurnSettled(context.Context, string, domain.SessionID) (bool, error)
 }
 
+// SetRollbackHermes late-binds the harness-specific rollback glue (issue #25).
+// The daemon wires it after both the Chat service and the session manager
+// exist; nil keeps every rollback on the ordinary controller path.
+func (s *Service) SetRollbackHermes(rollback func(ctx context.Context, id domain.SessionID, turnID string) (int, bool, error)) {
+	s.rollbackHermes = rollback
+}
+
 // SetWakeCallback connects a cold Chat session to Session Manager's native
 // resume path. It is installed after both services have been constructed.
 func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) error) {
