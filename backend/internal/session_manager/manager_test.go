@@ -322,6 +322,10 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	return true, nil
 }
 
+func (f *fakeStore) RollbackTurns(_ context.Context, _, _ string, _ time.Time) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deletePrepErr != nil {
 		return false, f.deletePrepErr

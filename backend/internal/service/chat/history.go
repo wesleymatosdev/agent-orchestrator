@@ -113,6 +113,15 @@ const maxTitleRunes = 80
 // not. The controller holds its dispatch lock across the check and the call, so
 // within AO the answer cannot change underneath.
 func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID string) (int, error) {
+	// Harness-specific provider glue goes first: hermes rolls back by forking
+	// its own transcript (issue #25), which the ordinary controller path —
+	// built around a live conversation that can discard in place — does not
+	// model. handled=false falls through to that path untouched.
+	if s.rollbackHermes != nil {
+		if discarded, handled, err := s.rollbackHermes(ctx, id, turnID); handled {
+			return discarded, err
+		}
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return 0, err

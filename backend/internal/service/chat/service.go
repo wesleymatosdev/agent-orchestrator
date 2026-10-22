@@ -82,6 +82,7 @@ type Service struct {
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
 	versionRefresh func() (time.Duration, bool)
+	rollbackHermes func(ctx context.Context, id domain.SessionID, turnID string) (int, bool, error)
 	// versionSwitches holds the release each stopped-for-refresh session is
 	// moving to, until its wake succeeds or fails.
 	versionSwitchMu sync.Mutex
@@ -196,6 +197,11 @@ type Options struct {
 	// harness release moves to the installed one on its next message, and the
 	// quiet time required first. Nil never moves a session.
 	VersionRefresh func() (time.Duration, bool)
+	// RollbackHermes routes a rollback to harness-specific provider glue before
+	// the ordinary controller path. handled=false falls through (the session is
+	// not the harness the glue serves); a handled error is returned as-is.
+	// Nil leaves every session on the controller path.
+	RollbackHermes func(ctx context.Context, id domain.SessionID, turnID string) (discarded int, handled bool, err error)
 }
 
 // New builds a Chat service.
@@ -227,6 +233,7 @@ func New(opts Options) *Service {
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		versionRefresh:         opts.VersionRefresh,
+		rollbackHermes:         opts.RollbackHermes,
 		controllers:            make(map[domain.SessionID]*Controller),
 		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
