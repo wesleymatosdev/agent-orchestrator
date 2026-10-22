@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -58,68 +59,75 @@ func (p *Plugin) ForkAtCut(
 	ctx context.Context,
 	dataDir, aoSessionID, recordedAgentSessionID, cutPrompt string,
 	turnsAfterInclusive int,
-) (RollbackFork, error) {
+) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 	if turnsAfterInclusive < 1 {
-		return RollbackFork{}, fmt.Errorf("%w: rollback must discard at least the named turn", ErrRollbackCutUnresolvable)
+		return "", fmt.Errorf("%w: rollback must discard at least the named turn", ErrRollbackCutUnresolvable)
 	}
 	id := strings.TrimSpace(recordedAgentSessionID)
 	if id == "" || id == "latest" || strings.ContainsAny(id, " /\\\r\n\t") {
-		return RollbackFork{}, fmt.Errorf("%w: exact native session ID required", ErrRollbackCutUnresolvable)
+		return "", fmt.Errorf("%w: exact native session ID required", ErrRollbackCutUnresolvable)
 	}
 	home, err := nativeHome(dataDir, aoSessionID)
 	if err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 	// Read-write on purpose: the fork writes new rows only. The busy timeout
 	// keeps a concurrently flushing hermes writer from failing the fork.
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?_pragma=busy_timeout%3d5000")
 	if err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 	defer func() { _ = db.Close() }()
 
 	headID, err := rollbackLiveHead(ctx, db, id)
 	if err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 
 	msgColumns, err := tableColumns(ctx, db, "messages")
 	if err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 	transcript, err := readTranscript(ctx, db, headID, msgColumns)
 	if err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 
 	userTurns := userTurnIndices(transcript)
 	cutPos := len(userTurns) - turnsAfterInclusive
 	if cutPos < 0 {
-		return RollbackFork{}, fmt.Errorf("%w: target predates the native transcript's retained history (compacted past the cut)", ErrRollbackCutUnresolvable)
+		return "", fmt.Errorf("%w: target predates the native transcript's retained history (compacted past the cut)", ErrRollbackCutUnresolvable)
 	}
 	cutRow := transcript[userTurns[cutPos]]
 	if !promptMatches(flattenRowContent(cutRow), cutPrompt) {
-		return RollbackFork{}, fmt.Errorf("%w: native transcript turn %d does not carry the named prompt", ErrRollbackCutUnresolvable, cutPos)
+		return "", fmt.Errorf("%w: native transcript turn %d does not carry the named prompt", ErrRollbackCutUnresolvable, cutPos)
 	}
 
 	kept := transcript[:userTurns[cutPos]]
 	if err := verifyToolPairing(kept); err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
 
 	childID := uuid.NewString()
 	if err := writeFork(ctx, db, headID, childID, kept); err != nil {
-		return RollbackFork{}, err
+		return "", err
 	}
-	return RollbackFork{
-		ChildID:      childID,
-		HeadID:       headID,
-		KeptMessages: len(kept),
-		DroppedTurns: turnsAfterInclusive,
-	}, nil
+	return childID, nil
+}
+
+// RecordRollbackNote persists the rollback adoption under the AO session dir —
+// the same inspectability convention as the live-head note a drifted restore
+// writes — so the next native restore's provenance is readable.
+func (p *Plugin) RecordRollbackNote(dataDir, aoSessionID, childID string, droppedTurns int) error {
+	dir := sessionDir(dataDir, aoSessionID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	note := fmt.Sprintf("rolled back at fork %s (%d user turns discarded)\n", childID, droppedTurns)
+	return os.WriteFile(filepath.Join(dir, "live-head"), []byte(note), 0o600)
 }
 
 // rollbackLiveHead resolves the compaction fork chain's live leaf for the
