@@ -163,6 +163,13 @@ type Config struct {
 	// correction that covers every credential source — including the Bedrock
 	// and Vertex chains AO cannot inspect at all. Optional.
 	OnAuthRejected func()
+	// NormalizeText optionally rewrites user-visible provider text at the AO
+	// boundary: message and thought chunk deltas, accumulated completed text,
+	// tool-call titles, and approval summaries. Bindings whose providers emit
+	// display text in a language the user cannot read use it to apply a small,
+	// explicit label mapping. It must be idempotent, because deltas and the
+	// accumulated text are normalized independently. Nil leaves text untouched.
+	NormalizeText func(string) string
 }
 
 // TurnSettingsValidator validates live turn settings against launch-time state.
@@ -744,6 +751,7 @@ func (d *Driver) initialize(
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.normalizeText = d.cfg.NormalizeText
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns

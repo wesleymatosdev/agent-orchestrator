@@ -31,25 +31,30 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 		want []string
 		env  map[string]string
 	}{
-		{name: "defaults", want: []string{"acp"}},
 		{
-			name: "system prompt rides in the env overlay",
-			cfg:  acpdriver.LaunchConfig{SystemPrompt: "  Follow AO rules.  "},
+			name: "defaults still pin the output language",
 			want: []string{"acp"},
-			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Native persona text\n\nFollow AO rules."},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": outputLanguageInstruction},
 		},
 		{
-			name: "without a native persona the variable carries AO's instructions alone",
+			name: "system prompt rides in the env overlay ahead of the language pin",
+			cfg:  acpdriver.LaunchConfig{SystemPrompt: "  Follow AO rules.  "},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Native persona text\n\nFollow AO rules.\n\n" + outputLanguageInstruction},
+		},
+		{
+			name: "without a native persona the variable carries AO's instructions and the language pin",
 			cfg: acpdriver.LaunchConfig{
 				SystemPrompt: "Follow AO rules.", Env: map[string]string{"HERMES_HOME": t.TempDir()},
 			},
 			want: []string{"acp"},
-			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Follow AO rules."},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Follow AO rules.\n\n" + outputLanguageInstruction},
 		},
 		{
 			name: "model is session-owned, never a launch flag",
 			cfg:  acpdriver.LaunchConfig{Model: "anthropic/claude-sonnet"},
 			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": outputLanguageInstruction},
 		},
 	}
 	for _, tt := range tests {
@@ -63,6 +68,50 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 			}
 			if !reflect.DeepEqual(env, tt.env) {
 				t.Fatalf("env = %#v, want %#v", env, tt.env)
+			}
+			if prompt := env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]; !strings.Contains(prompt, "Never output Chinese") {
+				t.Fatalf("ephemeral prompt %q does not pin the output language", prompt)
+			}
+		})
+	}
+}
+
+func TestNormalizeCardLabelsTranslatesKnownZaiCards(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "built-in tool card",
+			in:   "🌐 Z.ai 内置工具：analyze_image / 输入：{\"path\":\"x.png\"}",
+			want: "🌐 Z.ai built-in tool: analyze_image / input: {\"path\":\"x.png\"}",
+		},
+		{
+			name: "output label",
+			in:   "输出：done",
+			want: "output: done",
+		},
+		{
+			name: "label word without the full-width colon stays untouched",
+			in:   "请输入文件名",
+			want: "请输入文件名",
+		},
+		{
+			name: "english text passes through unchanged",
+			in:   "built-in tool: analyze_image",
+			want: "built-in tool: analyze_image",
+		},
+		{
+			name: "normalization is idempotent",
+			in:   "输入：输入：",
+			want: "input: input: ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeCardLabels(tt.in); got != tt.want {
+				t.Fatalf("normalizeCardLabels(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

@@ -23,6 +23,35 @@ import (
 // hermesACPVersionTimeout bounds the `hermes acp --version` admission probe.
 const hermesACPVersionTimeout = 10 * time.Second
 
+// outputLanguageInstruction pins every hermes chat session to English. Hermes
+// sessions commonly run on the Z.ai/GLM models, which narrate tool calls in
+// their native Chinese style; that narration flows verbatim into the AO chat
+// transcript and into edit/permission approval cards, so a reader who cannot
+// read Chinese cannot tell what they are approving. This is a harness-level
+// constant: no per-project configuration has to remember it.
+const outputLanguageInstruction = "Output language: all user-visible output (narration, tool-call text, permission and edit approval requests, diff context, commit and PR text) must be in English. Never output Chinese."
+
+// cardLabelReplacements maps the known Z.ai/GLM provider-side tool-call card
+// labels to their English equivalents. It is a deliberate, explicit table —
+// not a general translation layer — for text the provider generates before it
+// reaches the ACP stream. The full-width colon keeps ordinary Chinese prose
+// that happens to contain the label word untouched.
+var cardLabelReplacements = []struct{ from, to string }{
+	{"内置工具：", "built-in tool: "},
+	{"输入：", "input: "},
+	{"输出：", "output: "},
+}
+
+// normalizeCardLabels rewrites the known Chinese card labels in provider text.
+// Replacements are idempotent, so normalizing per-delta and again over the
+// accumulated message text is safe.
+func normalizeCardLabels(text string) string {
+	for _, mapping := range cardLabelReplacements {
+		text = strings.ReplaceAll(text, mapping.from, mapping.to)
+	}
+	return text
+}
+
 // New launches `hermes acp` from the exact binary resolved by the existing
 // Hermes agent plugin. Hermes keeps filesystem and terminal execution in its
 // own process; AO advertises neither ACP client capability and receives typed
@@ -37,6 +66,7 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityDiffs: true,
 		},
+		NormalizeText:        normalizeCardLabels,
 		Configure:            configure,
 		SessionMode:          sessionMode,
 		SessionOptions:       sessionOptions,
@@ -55,22 +85,24 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 // persisting it into the transcript. Hermes reads that variable first and only
 // falls back to its native persona configuration when it is empty, so the
 // value folds the native persona in ahead of AO's instructions exactly like
-// the TUI launch path does.
+// the TUI launch path does. The output-language pin is appended
+// unconditionally: hermes sessions on Z.ai/GLM models otherwise narrate tool
+// calls and approval requests in Chinese, which AO users cannot act on.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
-	env := map[string]string(nil)
+	persona := ""
 	if prompt := strings.TrimSpace(cfg.SystemPrompt); prompt != "" {
-		persona, err := hermes.NativeEphemeralOverlay(cfg.Env)
+		overlay, err := hermes.NativeEphemeralOverlay(cfg.Env)
 		if err != nil {
 			return nil, nil, err
 		}
-		combined, err := hermes.ComposeEphemeralPrompt(persona, prompt)
+		combined, err := hermes.ComposeEphemeralPrompt(overlay, prompt)
 		if err != nil {
 			return nil, nil, err
 		}
-		env = map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": combined}
+		persona = combined + "\n\n"
 	}
-	return args, env, nil
+	return args, map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": persona + outputLanguageInstruction}, nil
 }
 
 // sessionMode maps AO's approval vocabulary onto Hermes' ACP session modes.

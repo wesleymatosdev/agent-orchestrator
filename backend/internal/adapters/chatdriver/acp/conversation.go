@@ -87,6 +87,10 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
+
+	// normalizeText rewrites user-visible provider text at the AO boundary.
+	// Nil when the binding supplies no mapping.
+	normalizeText func(string) string
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process
@@ -1292,12 +1296,14 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	}
 	messageIDs := sortedKeys(messages)
 	for _, id := range messageIDs {
-		text := messages[id]
+		// The binding mapping is idempotent, so normalizing the accumulated
+		// text also catches a label a delta boundary split apart.
+		text := c.normalize(messages[id])
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text})
 	}
 	thoughtIDs := sortedKeys(thoughts)
 	for _, id := range thoughtIDs {
-		text := thoughts[id]
+		text := c.normalize(thoughts[id])
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
 			ActivityStatus: activityStatus, Summary: "Reasoning", Text: text})
