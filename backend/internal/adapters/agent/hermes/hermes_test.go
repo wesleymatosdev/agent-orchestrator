@@ -625,6 +625,31 @@ func TestRestoreResumesTitledConversationWithoutCreating(t *testing.T) {
 	}
 }
 
+// Hermes retains a gateway session's launch policy on resume and rejects
+// creation overrides, so a configured --model / --reasoning must not ride the
+// restore command; the session keeps its own launch policy.
+func TestRestoreDropsModelOverride(t *testing.T) {
+	binary := fakeNativeBinary(t)
+	data, home := t.TempDir(), t.TempDir()
+	dir := sessionDir(data, "ao-1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"native-home": home, "native-title": "ao-ao-1-abc"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeNativeState(t, home, "20261020_native", "ao-ao-1-abc")
+	cmd, ok, err := New().GetRestoreCommand(t.Context(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-1", WorkspacePath: "/workspace"}, Config: ports.AgentConfig{Model: "anthropic/claude-sonnet-4.6", Effort: "high"}})
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if want := []string{binary, "chat", "--cli", "--in", "/workspace", "--continue", "ao-ao-1-abc"}; !slices.Equal(cmd, want) {
+		t.Fatalf("restore = %v, want %v", cmd, want)
+	}
+}
+
 func TestRestoreRefusesMissingOrUnreadableConversation(t *testing.T) {
 	for _, tt := range []struct {
 		name, state, want string

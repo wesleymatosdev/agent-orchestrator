@@ -1551,6 +1551,16 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := validate(launch); err != nil {
 		return nil, false, err
 	}
+	// Hermes retains a gateway session's launch policy on resume and rejects
+	// creation overrides ("Resume retains gateway session policy; creation
+	// overrides are unsupported on resume" — hermes_cli/gateway_chat.py
+	// resume_policy_error names -m/--model and --reasoning alike), so the
+	// restore command must carry neither: the session keeps its own model and
+	// reasoning; /model and /reasoning switch them after resume.
+	restoreConfig := cfg.Config
+	restoreConfig.Model = ""
+	restoreConfig.Effort = ""
+	launch.Config = restoreConfig
 	title, err := sessionTitle(cfg.DataDir, cfg.Session.ID)
 	if err != nil {
 		return nil, false, fmt.Errorf("hermes: AO native session title unavailable: %w", err)
