@@ -1325,6 +1325,14 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		>
 			<button
 				type="button"
+				onKeyDown={(event) => {
+					// Esc is the keyboard answer to the click that opened the row:
+					// collapse the one row under focus, leave the rest alone.
+					if (event.key === "Escape" && open) {
+						event.stopPropagation();
+						setOverride(false);
+					}
+				}}
 				onClick={() => setOverride(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -1430,8 +1438,10 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						{!isFileChange && detail?.command ? (
 							// Said explicitly rather than implied by the label: "Ran command"
 							// alone never tells the reader what ran, and the collapsed row
-							// deliberately keeps only the category.
-							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+							// deliberately keeps only the category. The body repeats the
+							// command verbatim, and wraps rather than scrolls it, for the
+							// same reason the explore body does.
+							<pre className="scrollbar-none select-text whitespace-pre-wrap break-words border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
 						) : null}
@@ -1494,7 +1504,9 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			{command ? (
 				<pre
 					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
+						// The command wraps instead of scrolling: a long invocation must be
+					// readable — and selectable — without a horizontal hunt.
+					"cursor-chat-explore-command select-text whitespace-pre-wrap break-words px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
 					)}
 				>
