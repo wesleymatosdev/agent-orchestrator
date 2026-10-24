@@ -3725,11 +3725,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// resumes do not necessarily emit SessionStart until the next user turn, and
 	// Claude emits SessionStart after its resume process is already running, but
 	// both adapters' explicit resume commands name the exact stored conversation.
-	// The interface coordinator provides the same guarantee after it freezes Chat
-	// and transfers the required native history. Fresh and fallback launches
-	// still require current-generation identity proof from their hooks.
+	// Hermes qualifies for the same reason — its restore command resumes the
+	// exact AO-titled conversation and GetRestoreCommand has already proven the
+	// native identity (title lookup in hermes' state.db) before this launch
+	// exists. The interface coordinator provides the same guarantee after it
+	// freezes Chat and transfers the required native history. Fresh and
+	// fallback launches still require current-generation identity proof from
+	// their hooks.
 	bindNativeIdentity := mode == RestoreModeNative &&
-		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
+		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || rec.Harness == domain.HarnessHermes || m.terminalVersionRefreshSupported(rec.Harness))
 	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
 	}
