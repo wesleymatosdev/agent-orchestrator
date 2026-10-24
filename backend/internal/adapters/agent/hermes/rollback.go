@@ -153,6 +153,43 @@ func rollbackLiveHead(ctx context.Context, db *sql.DB, recorded string) (string,
 	return leafID, nil
 }
 
+// liveForkLeaf descends the same-workspace compaction fork chain below start
+// to its most recent leaf, following parent_session_id with rowid as the
+// recency tiebreak, and verifies the leaf is resumable (has messages). It
+// returns the chain root→leaf so callers can accept the whole chain's
+// terminal identity; ok is false when the walk fails or ends on an empty
+// dead end, which keeps those sessions refused.
+func liveForkLeaf(ctx context.Context, db *sql.DB, start string) (leafID, leafCwd string, leafMessages int, chain []string, ok bool) {
+	current := start
+	chain = []string{start}
+	for depth := 0; depth < 64; depth++ {
+		var cwd string
+		var messages int
+		if err := db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id) FROM sessions WHERE id=?", current).Scan(&cwd, &messages); err != nil {
+			return "", "", 0, nil, false
+		}
+		var child string
+		err := db.QueryRowContext(ctx, "SELECT child.id FROM sessions child WHERE child.parent_session_id=? AND COALESCE(child.cwd,'')=COALESCE(?,'') ORDER BY child.rowid DESC LIMIT 1", current, cwd).Scan(&child)
+		switch {
+		case err == sql.ErrNoRows:
+			if messages == 0 {
+				return "", "", 0, nil, false
+			}
+			return current, cwd, messages, chain, true
+		case err != nil:
+			return "", "", 0, nil, false
+		}
+		for _, seen := range chain {
+			if seen == child {
+				return "", "", 0, nil, false
+			}
+		}
+		chain = append(chain, child)
+		current = child
+	}
+	return "", "", 0, nil, false
+}
+
 // tableColumns returns the table's column names in declared order. The fork
 // copies every column it finds (minus the ones it owns), so schema drift on
 // the hermes side cannot produce a silently lossy copy.
