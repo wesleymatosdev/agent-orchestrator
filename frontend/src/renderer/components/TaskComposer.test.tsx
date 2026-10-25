@@ -2007,6 +2007,34 @@ describe("TaskComposer", () => {
 		expect(screen.getByText("Configure the model in opencode, then refresh.")).toBeInTheDocument();
 	});
 
+	it("forwards the catalog custom model entry mode to the composer picker", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agentId: "codex",
+						selectionMode: "catalog",
+						models: [{ id: "gpt-5", label: "GPT-5" }],
+						customModelEntry: "direct",
+						allowCustom: false,
+					},
+				};
+			}
+			return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+		});
+
+		render(
+			<Wrap>
+				<TaskComposer projectId="proj-1" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		const search = screen.getByRole("searchbox");
+		await userEvent.type(search, "private/model-id");
+		expect(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" })).toBeInTheDocument();
+	});
+
 	it("uses the project worker model as the new task model default", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {

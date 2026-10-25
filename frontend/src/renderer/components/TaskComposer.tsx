@@ -953,7 +953,7 @@ function TaskModelPicker({
 			value={value}
 			models={displayModels}
 			allowCustom={false}
-			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			customModelEntry={catalog?.customModelEntry ?? "none"}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
