@@ -43,6 +43,18 @@ type rollbackConversationStore interface {
 	ConversationForSession(ctx context.Context, session domain.SessionID) (domain.ConversationRecord, error)
 }
 
+// hermesNativeConversationID reads the native state.db session id the
+// conversation is recorded under. On this branch a chat conversation's native
+// identity is the ACP session id hermes persists into its shared state.db,
+// recorded as ProviderConversationID; interface handoffs additionally bind
+// AgentSessionID, so it stays the fallback.
+func hermesNativeConversationID(rec domain.SessionRecord) string {
+	if id := rec.Metadata.ProviderConversationID; id != "" {
+		return id
+	}
+	return rec.Metadata.AgentSessionID
+}
+
 // RollbackHermesToFork maps a rollback-at-message onto hermes' own rewind
 // semantics: fork the native transcript at the cut (never mutating existing
 // rows), discard AO's rows from the cut onward, re-point AO's recorded
@@ -75,7 +87,7 @@ func (m *Manager) RollbackHermesToFork(
 	if rec.Harness != domain.HarnessHermes ||
 		domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat ||
 		rec.IsTerminated ||
-		rec.Metadata.AgentSessionID == "" {
+		hermesNativeConversationID(rec) == "" {
 		return 0, ErrRollbackNotApplicable
 	}
 	if rec.Activity.State == domain.ActivityActive || rec.Activity.State == domain.ActivityBlocked {
@@ -114,7 +126,7 @@ func (m *Manager) RollbackHermesToFork(
 		}
 	}
 
-	child, err := m.hermesFork.ForkAtCut(ctx, m.dataDir, string(id), rec.Metadata.AgentSessionID, cutPrompt, turnsAfterInclusive)
+	child, err := m.hermesFork.ForkAtCut(ctx, m.dataDir, string(id), hermesNativeConversationID(rec), cutPrompt, turnsAfterInclusive)
 	if err != nil {
 		return 0, fmt.Errorf("hermes rollback %s: %w", id, err)
 	}
