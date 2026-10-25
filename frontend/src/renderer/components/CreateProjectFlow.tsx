@@ -38,7 +38,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
-import { usePreparedClone } from "../hooks/usePreparedClone";
+import { cloneFailureMessage, usePreparedClone, type CloneProgress } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -223,6 +223,7 @@ export function CreateProjectFlow({
 	const [isCreating, setIsCreating] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
+	const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
 	const [repositorySetupWarning, setRepositorySetupWarning] = useState<string | null>(null);
 	// A path that arrived via droppedPath, staged until the user confirms
@@ -591,11 +592,14 @@ export function CreateProjectFlow({
 		if (previous && !preparedClone.matches(next) && !(await abandonPreparedClone())) return;
 		setError(null);
 		setCloneRegistrationFailed(false);
+		setCloneProgress(null);
 		setIsPreparingGit(true);
 		setCloneActivity(preparedClone.current() ? "validating" : "cloning");
 		let clonedPath: string | null = null;
 		try {
-			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent);
+			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent, (progress) => {
+				setCloneProgress(progress.stage === "done" || progress.stage === "failed" ? null : progress);
+			});
 			clonedPath = data.path;
 			setCloneActivity("validating");
 			const validation = await validateImportFolder(data.path, "project", hostId);
@@ -623,14 +627,16 @@ export function CreateProjectFlow({
 			} else {
 				reportProjectError(clonedPath
 					? t("createProject.cloneValidationKept", { path: clonedPath })
-					: apiErrorCode(err) === "GIT_CLONE_TIMED_OUT"
+					: cloneFailureMessage(err,
+					apiErrorCode(err) === "GIT_CLONE_TIMED_OUT"
 						? t("createProject.cloneTimedOut")
-						: safeProjectCreationError(apiErrorMessage(err), t("createProject.cloneFailedGuidance", { defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection." })));
+						: safeProjectCreationError(apiErrorMessage(err), t("createProject.cloneFailedGuidance", { defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection." }))));
 			}
 			setCloneDialogOpen(true);
 		} finally {
 			setCloneActivity(null);
 			setIsPreparingGit(false);
+			setCloneProgress(null);
 		}
 	};
 
@@ -856,6 +862,7 @@ export function CreateProjectFlow({
 							}}
 							onCancel={preparedClone.cancel}
 							activity={cloneActivity}
+							progress={isPreparingGit ? cloneProgress : null}
 							onContinue={(next) => void prepareClone(next)}
 							onError={reportProjectError}
 							open={cloneDialogOpen && !settingsOpen}

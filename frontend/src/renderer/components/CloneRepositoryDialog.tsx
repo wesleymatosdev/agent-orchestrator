@@ -29,6 +29,12 @@ type DestinationCheck =
 
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
+/** Live clone progress relayed from the daemon while prepare is in flight. */
+export type CloneDialogProgress = {
+	percent: number | null;
+	message: string;
+};
+
 export default function CloneRepositoryDialog({
 	cloning = false,
 	disabled,
@@ -41,6 +47,7 @@ export default function CloneRepositoryDialog({
 	onUseExisting,
 	onCancel,
 	activity = null,
+	progress = null,
 	onError,
 	onChooseRemoteDestination,
 	open,
@@ -60,6 +67,7 @@ export default function CloneRepositoryDialog({
 	onUseExisting: (path: string) => void;
 	onCancel: () => void;
 	activity?: "cloning" | "validating" | null;
+	progress?: CloneDialogProgress | null;
 	onError?: (message: string) => void;
 	onChooseRemoteDestination?: () => void;
 	open: boolean;
@@ -288,7 +296,7 @@ export default function CloneRepositoryDialog({
 					<form className="min-h-0 overflow-y-auto" onSubmit={submit}>
 						<div className="space-y-4 px-4 pb-1 pt-4">
 							{parentError || destinationPickerError ? (
-								<div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-pretty text-[12px] leading-5 text-destructive" role="alert">
+								<div className="max-h-40 overflow-y-auto whitespace-pre-line rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-pretty text-[12px] leading-5 text-destructive" role="alert">
 									{destinationPickerError ?? parentError}
 								</div>
 							) : null}
@@ -402,6 +410,19 @@ export default function CloneRepositoryDialog({
 
 						{activity ? <div className="space-y-1 px-4 pt-3 text-[12px] text-muted-foreground" role="status" aria-live="polite">
 							<p className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(activity === "cloning" ? "createProject.cloneInProgress" : "createProject.cloneVerifying", { seconds: elapsed })}</p>
+							{progress ? (
+								<>
+									{typeof progress.percent === "number" ? (
+										<div className="h-1 w-full overflow-hidden rounded-full bg-border">
+											<div
+												className="h-full rounded-full bg-foreground/70 transition-[width]"
+												style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%` }}
+											/>
+										</div>
+									) : null}
+									{progress.message ? <p className="truncate font-mono">{progress.message}</p> : null}
+								</>
+							) : null}
 							{activity === "cloning" ? <p>{t("createProject.cloneSlowHint")}</p> : null}
 						</div> : null}
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
