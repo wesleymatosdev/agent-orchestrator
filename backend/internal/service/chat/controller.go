@@ -722,6 +722,7 @@ func (p nativeHistoryCheckpoint) debugDumpHistoryReplay(
 		boundaryBy[turnID] = fmt.Sprintf("item=%q kind=%q text=%q activity=%q/%q summary=%q", b.providerItemID, b.kind, b.text, b.activityKind, b.activityStatus, b.summary)
 	}
 	// Best effort: the dump is an instrument, not correctness.
+	//nolint:gosec // G303: fixed diagnostic path, not caller-controlled
 	_ = os.WriteFile("/tmp/ao-history-replay-dump.json", func() []byte {
 		b, _ := json.MarshalIndent(map[string]any{
 			"highWater":        fmt.Sprintf("turn=%q item=%q kind=%q text=%q activity=%q/%q", p.aoHighWater.providerTurnID, p.aoHighWater.providerItemID, p.aoHighWater.kind, p.aoHighWater.text, p.aoHighWater.activityKind, p.aoHighWater.activityStatus),
