@@ -568,6 +568,79 @@ it("keeps accepted remote sends accepted when the follow-up read fails", async (
 	expect(screen.queryByText(/delivery wasn’t confirmed/)).not.toBeInTheDocument();
 });
 
+it("keeps the remote timeline visible while the chat controller restarts", async () => {
+	let conversationReads = 0;
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) {
+			conversationReads++;
+			if (conversationReads === 2) {
+				// The controller is starting up right after the send; the daemon
+				// answers 409 CHAT_CONTROLLER_NOT_READY until it is ready.
+				return Response.json({ code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" }, { status: 409 });
+			}
+			return Response.json(conversationBody({
+				latestSequence: conversationReads > 2 ? 2 : 1,
+				messages: conversationReads > 2
+					? [
+						{ id: "first", role: "assistant", text: "Still here", sequence: 1 },
+						{ id: "second", role: "assistant", text: "Recovered after restart", sequence: 2 },
+					]
+					: [{ id: "first", role: "assistant", text: "Still here", sequence: 1 }],
+			}));
+		}
+		if (path.endsWith("/conversation/messages")) return Response.json({ state: "accepted", turnId: "turn-2" }, { status: 202 });
+		throw new Error(`Unexpected request ${request.url}`);
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderRemoteSession(queryClient);
+	await screen.findByText("Still here");
+	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Continue");
+	fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+	// A transient startup failure must not replace the stale success snapshot
+	// with the fatal banner; the poll recovers and the timeline stays live.
+	await screen.findByText("Recovered after restart", {}, { timeout: 4_000 });
+	expect(screen.queryByText("Could not load this remote conversation.")).not.toBeInTheDocument();
+	expect(screen.getByText("Still here")).toBeInTheDocument();
+});
+
+it("renders the remote startup window as loading, not a fatal conversation error", async () => {
+	let conversationReads = 0;
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) {
+			conversationReads++;
+			if (conversationReads < 3) {
+				// The chat controller has not started yet; the daemon answers
+				// 409 CHAT_INTERFACE_TRANSITION while a handoff is in flight.
+				return Response.json({ code: "CHAT_INTERFACE_TRANSITION", message: "the session is switching interfaces; send again after the handoff completes" }, { status: 409 });
+			}
+			return Response.json(conversationBody({ messages: [{ id: "first", role: "assistant", text: "Controller ready", sequence: 1 }] }));
+		}
+		throw new Error(`Unexpected request ${request.url}`);
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderRemoteSession(queryClient);
+	// The startup window renders as loading...
+	expect(await screen.findByText("Loading conversation…")).toBeInTheDocument();
+	// The startup window keeps loading through the poll until the controller is
+	// ready; neither a hard error nor the remote banner may flash.
+	expect(await screen.findByText("Controller ready", {}, { timeout: 6_000 })).toBeInTheDocument();
+	expect(screen.queryByText("Could not load this conversation.")).not.toBeInTheDocument();
+	expect(screen.queryByText("Could not load this remote conversation.")).not.toBeInTheDocument();
+	expect(conversationReads).toBeGreaterThanOrEqual(3);
+});
+
 it("reattaches a terminal when the same host gets a new proxy connection", async () => {
 	remoteConnect.mockReset()
 		.mockResolvedValueOnce({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000/old" })
