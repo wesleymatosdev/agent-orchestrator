@@ -90,7 +90,7 @@ type conversation struct {
 
 	// normalizeText rewrites user-visible provider text at the AO boundary.
 	// Nil when the binding supplies no mapping.
-	normalizeText func(string) string
+	normalizeText        func(string) string
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process

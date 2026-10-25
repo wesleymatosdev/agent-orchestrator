@@ -721,7 +721,8 @@ func (p nativeHistoryCheckpoint) debugDumpHistoryReplay(
 	for turnID, b := range boundaries {
 		boundaryBy[turnID] = fmt.Sprintf("item=%q kind=%q text=%q activity=%q/%q summary=%q", b.providerItemID, b.kind, b.text, b.activityKind, b.activityStatus, b.summary)
 	}
-	os.WriteFile("/tmp/ao-history-replay-dump.json", func() []byte {
+	// Best effort: the dump is an instrument, not correctness.
+	_ = os.WriteFile("/tmp/ao-history-replay-dump.json", func() []byte {
 		b, _ := json.MarshalIndent(map[string]any{
 			"highWater":        fmt.Sprintf("turn=%q item=%q kind=%q text=%q activity=%q/%q", p.aoHighWater.providerTurnID, p.aoHighWater.providerItemID, p.aoHighWater.kind, p.aoHighWater.text, p.aoHighWater.activityKind, p.aoHighWater.activityStatus),
 			"boundaries":       boundaryBy,
@@ -733,7 +734,7 @@ func (p nativeHistoryCheckpoint) debugDumpHistoryReplay(
 			"replayEvents":     dumpEvents,
 		}, "", "  ")
 		return b
-	}(), 0o644)
+	}(), 0o600)
 }
 
 func (p nativeHistoryCheckpoint) mismatches(
