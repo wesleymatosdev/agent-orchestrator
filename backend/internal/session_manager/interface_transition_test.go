@@ -544,6 +544,8 @@ type transitionChat struct {
 	start            ChatStart
 	preflightErr     error
 	startErr         error
+	prepareErr       error
+	prepareBlock     chan struct{}
 	preflightStarted chan struct{}
 	preflightRelease chan struct{}
 	relayMessages    []string
@@ -764,9 +766,23 @@ func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID
 	c.switchMarks = append(c.switchMarks, accountID)
 	return nil
 }
-func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
+func (c *transitionChat) PrepareChatHandoff(ctx context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c.preparedPolicy = policy
 	*c.log = append(*c.log, "prepare:chat:"+string(policy))
+	if c.prepareErr != nil {
+		// Mirror the real controller: BeginHandoff aborts the fence itself
+		// before returning a failed drain, so source intake reopens.
+		c.AbortChatHandoff("")
+		return c.prepareErr
+	}
+	if c.prepareBlock != nil {
+		select {
+		case <-ctx.Done():
+			c.AbortChatHandoff("")
+			return ctx.Err()
+		case <-c.prepareBlock:
+		}
+	}
 	return nil
 }
 func (c *transitionChat) AbortChatHandoff(domain.SessionID) {

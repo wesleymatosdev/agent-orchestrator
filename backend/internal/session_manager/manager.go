@@ -787,6 +787,11 @@ type interfaceTransitionConfig struct {
 	pollInterval   time.Duration
 	idleSettle     time.Duration
 	staleIdleLimit time.Duration
+	// decisionWatchdog bounds how long the drain watchdog tolerates the
+	// session waiting on a user decision while the transition is draining.
+	// Non-positive disables the watchdog; production sets
+	// interfaceTransitionDecisionWatchdog.
+	decisionWatchdog time.Duration
 }
 
 // Production sendConfirm bounds: 3 Enters total (1 from Send + 2 re-sends),
@@ -912,9 +917,10 @@ func New(d Deps) *Manager {
 			maxAttempts:     sendConfirmMaxAttempts,
 		},
 		interfaceTransition: interfaceTransitionConfig{
-			pollInterval:   interfaceTransitionPoll,
-			idleSettle:     interfaceTransitionIdleSettle,
-			staleIdleLimit: interfaceTransitionStaleIdleLimit,
+			pollInterval:     interfaceTransitionPoll,
+			idleSettle:       interfaceTransitionIdleSettle,
+			staleIdleLimit:   interfaceTransitionStaleIdleLimit,
+			decisionWatchdog: interfaceTransitionDecisionWatchdog,
 		},
 		logger:         d.Logger,
 		workspaceGates: make(map[domain.ProjectID]*sync.Mutex),

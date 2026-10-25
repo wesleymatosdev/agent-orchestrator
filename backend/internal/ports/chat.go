@@ -70,6 +70,13 @@ var (
 	// no enforced mapping in this provider. Drivers must return it instead of
 	// silently running with a different permission policy.
 	ErrChatPermissionModeUnsupported = errors.New("chat permission mode is unsupported")
+	// ErrChatHandoffDecisionPending means a drain handoff cannot reach
+	// quiescence because the in-flight turn is blocked on an unresolved approval
+	// or user-input request. The fenced source UI cannot answer it, so waiting
+	// would deadlock the transition: the drain waits for the turn while the turn
+	// waits for a decision the user can no longer reach. The handoff must abort
+	// and reopen source intake instead.
+	ErrChatHandoffDecisionPending = errors.New("chat drain blocked on a pending approval or input request")
 	// ErrChatHistoryUnsettled means the native conversation history is not safe
 	// to project as complete. Only a ChatHistoryRefresher promises that another
 	// provider observation may make progress; rereading a snapshot need not.

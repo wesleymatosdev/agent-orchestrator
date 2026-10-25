@@ -2174,6 +2174,24 @@ func (c *Controller) BeginHandoff(
 		c.mu.Lock()
 		busy := c.pendingTurnID != ""
 		c.mu.Unlock()
+		if busy {
+			// A turn blocked on an approval or user-input request can never
+			// finish under this fence: the drain waits for the turn while the
+			// turn waits for a decision the frozen source UI cannot give. Poll
+			// the durable interaction rows every tick so the deadlock fails
+			// fast instead of parking the transition in draining forever.
+			pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID)
+			if err != nil {
+				c.sendMu.Unlock()
+				c.AbortHandoff()
+				return fmt.Errorf("check pending interactions during handoff drain: %w", err)
+			}
+			if pending {
+				c.sendMu.Unlock()
+				c.AbortHandoff()
+				return fmt.Errorf("drain handoff: %w", ports.ErrChatHandoffDecisionPending)
+			}
+		}
 		if !busy {
 			_, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
 			switch {
