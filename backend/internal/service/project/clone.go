@@ -1,16 +1,19 @@
 package project
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +33,11 @@ var allowedCloneSchemes = map[string]struct{}{
 }
 
 const clonePreparationMarker = ".ao-clone-prepared"
+
+// maxCloneStderrTail bounds the git stderr tail carried in an error envelope.
+// Git progress output can be megabytes for a large clone; the diagnosis lives
+// in the last lines (fatal error, credential hint, network failure).
+const maxCloneStderrTail = 4000
 
 // normalizeCloneURL only rewrites public GitHub repository roots. Other Git
 // transports and self-hosted URL shapes retain their original meaning.
@@ -120,6 +128,12 @@ func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 // PrepareClone checks out a repository without registering it as a project.
 func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
 	return m.prepareClone(ctx, in)
+}
+
+// SubscribeCloneProgress exposes the live clone progress hub to the SSE
+// surface. Events are best-effort broadcasts; see clone_progress.go.
+func (m *Service) SubscribeCloneProgress(ctx context.Context) <-chan CloneProgressEvent {
+	return m.cloneProgress.subscribe(ctx)
 }
 
 // CleanupPreparedClone removes an unregistered checkout created by PrepareClone,
@@ -218,28 +232,49 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	}()
 
 	for attempt := 0; ; attempt++ {
-		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--", remoteURL, temporaryPath)
-		aoprocess.ConfigureTreeCancellation(cmd)
+		// --progress forces git to emit its usual stderr progress meter even
+		// without a terminal, which is what the clone progress stream relays.
+		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--progress", "--", remoteURL, temporaryPath)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "LC_ALL=C")
+		// Kill git's whole process tree on cancellation: a killed `git clone`
+		// leaves transport children holding the stderr pipe, which would block
+		// the progress scanner (and the error envelope) until they exit.
+		aoprocess.ConfigureTreeCancellation(cmd)
 		var stderr limitedCloneOutput
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		if err == nil {
+		stderrTail, runErr := m.runCloneCommand(remoteURL, cmd, &stderr)
+		if runErr == nil {
 			break
 		}
 		var executableError *exec.Error
-		if errors.As(err, &executableError) {
+		if errors.As(runErr, &executableError) {
 			return ClonePreparationResult{}, apierr.Invalid("GIT_NOT_FOUND", "Git is required to clone a repository.", nil)
 		}
+		// Git's own output is the only real diagnosis for a failed or
+		// cancelled clone (bad URL, auth prompt, network trouble, a request
+		// budget that fired mid-transfer). Carry a bounded tail in the
+		// envelope instead of returning a bare message.
+		var details map[string]any
+		if trimmed := redactGitCredentials(strings.TrimSpace(stderrTail)); trimmed != "" {
+			details = map[string]any{"gitStderr": trimmed}
+		}
+		failed := CloneProgressEvent{RemoteURL: remoteURL, Stage: CloneStageFailed}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_TIMED_OUT", "Cloning this repository took too long and was stopped.", nil)
+			failed.Message = "Cloning this repository took too long and was stopped."
+			m.cloneProgress.publish(failed)
+			return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_TIMED_OUT", failed.Message, details)
 		}
 		if ctx.Err() != nil {
-			return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_CANCELLED", "Repository cloning was cancelled.", nil)
+			failed.Message = "Repository cloning was cancelled."
+			m.cloneProgress.publish(failed)
+			return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_CANCELLED", failed.Message, details)
 		}
 		if transientCloneFailure(stderr.String()) {
 			if attempt == 2 {
-				return ClonePreparationResult{}, apierr.Unavailable("GIT_CLONE_NETWORK_FAILED", "The connection failed after three attempts. Check your connection, then retry. Your URL and destination have been kept.")
+				networkFailed := apierr.Unavailable("GIT_CLONE_NETWORK_FAILED", "The connection failed after three attempts. Check your connection, then retry. Your URL and destination have been kept.")
+				networkFailed.Details = details
+				failed.Message = networkFailed.Message
+				m.cloneProgress.publish(failed)
+				return ClonePreparationResult{}, networkFailed
 			}
 			// Only discard this attempt's private staging folder, never target.
 			if err := os.RemoveAll(temporaryPath); err != nil {
@@ -254,11 +289,15 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 			}
 			continue
 		}
-		return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_FAILED", "Could not clone this repository. Check the URL, your Git credentials, and your network connection.", nil)
+		failed.Message = "Could not clone this repository. Check the URL, your Git credentials, and your network connection."
+		m.cloneProgress.publish(failed)
+		return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_FAILED", failed.Message, details)
 	}
 	if ctx.Err() != nil {
 		return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_CANCELLED", "Repository cloning was cancelled.", nil)
 	}
+	done := 100.0
+	m.cloneProgress.publish(CloneProgressEvent{RemoteURL: remoteURL, Stage: CloneStageDone, Percent: &done, Message: "Clone complete"})
 	preparationID, err := newClonePreparationID()
 	if err != nil {
 		return ClonePreparationResult{}, apierr.Internal("CLONE_PREPARATION_FAILED", "AO could not identify the prepared clone")
@@ -272,6 +311,104 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	cleanupPath = target
 	cleanupPath = ""
 	return ClonePreparationResult{Path: target, RemoteURL: remoteURL, PreparationID: preparationID}, nil
+}
+
+// runCloneCommand runs one git clone, streaming its stderr as clone progress
+// events while feeding the retry classifier, and returning a bounded tail of
+// that output so a failure envelope can carry git's own diagnosis.
+func (m *Service) runCloneCommand(remoteURL string, cmd *exec.Cmd, classify *limitedCloneOutput) (string, error) {
+	stderr, pipeErr := cmd.StderrPipe()
+	if pipeErr != nil {
+		// StderrPipe only fails for an already-started command; fall back to
+		// a plain run with no progress stream.
+		return "", cmd.Run()
+	}
+	var tail cloneStderrTail
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	scanner := bufio.NewScanner(stderr)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		_, _ = classify.Write([]byte(line + "\n"))
+		tail.add(line)
+		if event, ok := cloneProgressFromGitLine(remoteURL, line); ok {
+			m.cloneProgress.publish(event)
+		}
+	}
+	// Drain anything the scanner did not consume so Wait never deadlocks on
+	// a full pipe.
+	_, _ = io.Copy(io.Discard, stderr)
+	waitErr := cmd.Wait()
+	return tail.value(), waitErr
+}
+
+// gitURLCredentialPattern matches scheme://user:password@ so a failed auth
+// cannot leak the secret through the error envelope. Git prints the remote
+// URL verbatim in auth failures, including any embedded credentials.
+var gitURLCredentialPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)([^\s:@/]+):([^\s@/]+)@`)
+
+func redactGitCredentials(stderr string) string {
+	return gitURLCredentialPattern.ReplaceAllString(stderr, "${1}${2}:***@")
+}
+
+// gitProgressStages maps a stderr progress label to a clone progress stage.
+var gitProgressStages = []struct {
+	prefix string
+	stage  string
+}{
+	{"Receiving objects:", CloneStageReceiving},
+	{"Resolving deltas:", CloneStageResolving},
+	{"Updating files:", CloneStageCheckingOut},
+	{"Checking out files:", CloneStageCheckingOut},
+	{"Cloning into", CloneStageStarting},
+}
+
+var gitPercentPattern = regexp.MustCompile(`(\d+)%`)
+
+// cloneProgressFromGitLine parses one git stderr line into a progress event.
+// Auxiliary lines (remote: counters, unrelated notices) yield ok=false: the
+// stderr tail in the error envelope already preserves them for failures.
+func cloneProgressFromGitLine(remoteURL, line string) (CloneProgressEvent, bool) {
+	stage := ""
+	for _, entry := range gitProgressStages {
+		if strings.HasPrefix(line, entry.prefix) {
+			stage = entry.stage
+			break
+		}
+	}
+	if stage == "" {
+		return CloneProgressEvent{}, false
+	}
+	event := CloneProgressEvent{RemoteURL: remoteURL, Stage: stage, Message: line}
+	if match := gitPercentPattern.FindStringSubmatch(line); match != nil {
+		if percent, err := strconv.ParseFloat(match[1], 64); err == nil {
+			event.Percent = &percent
+		}
+	}
+	return event, true
+}
+
+// cloneStderrTail keeps the last lines of git's stderr, bounded so a huge
+// clone's progress meter cannot balloon an error envelope.
+type cloneStderrTail struct {
+	lines []string
+}
+
+func (t *cloneStderrTail) add(line string) {
+	t.lines = append(t.lines, line)
+	if len(t.lines) > 40 {
+		t.lines = t.lines[len(t.lines)-40:]
+	}
+}
+
+func (t *cloneStderrTail) value() string {
+	joined := strings.Join(t.lines, "\n")
+	if len(joined) > maxCloneStderrTail {
+		joined = joined[len(joined)-maxCloneStderrTail:]
+	}
+	return joined
 }
 
 // Git may print a URL containing secrets. Inspect bounded output for retry

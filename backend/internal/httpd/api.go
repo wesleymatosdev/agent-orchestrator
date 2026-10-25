@@ -269,7 +269,8 @@ func (a *API) Register(root chi.Router) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
-						pattern == "/api/v1/projects/clone/prepare" {
+						pattern == "/api/v1/projects/clone/prepare" ||
+						pattern == "/api/v1/projects/clone/cleanup" {
 						clone.ServeHTTP(w, req)
 						return
 					}
@@ -333,6 +334,7 @@ func (a *API) Register(root chi.Router) {
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.
+		a.projects.RegisterStreams(r)
 		a.notifications.RegisterStream(r)
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
