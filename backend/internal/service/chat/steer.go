@@ -551,7 +551,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 	}
 	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, "")
+	activity, err := makeSteerActivity(activityID, msg)
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, err)
 	}
@@ -759,7 +759,7 @@ func (c *Controller) recordSteer(
 	msg ports.ChatUserMessage,
 ) (string, error) {
 	id := c.newID()
-	activity, err := makeSteerActivity(id, msg, "")
+	activity, err := makeSteerActivity(id, msg)
 	if err != nil {
 		return "", err
 	}
@@ -773,7 +773,6 @@ func (c *Controller) recordSteer(
 func makeSteerActivity(
 	id string,
 	msg ports.ChatUserMessage,
-	sourceTurnID string,
 ) (domain.ConversationActivity, error) {
 	detail := map[string]any{
 		"event":  "steer",
@@ -791,9 +790,6 @@ func makeSteerActivity(
 	}
 	if msg.ClientMessageID != "" {
 		detail["clientMessageId"] = msg.ClientMessageID
-	}
-	if sourceTurnID != "" {
-		detail["sourceTurnId"] = sourceTurnID
 	}
 	if len(msg.Content) > 0 {
 		detail["content"] = msg.Content

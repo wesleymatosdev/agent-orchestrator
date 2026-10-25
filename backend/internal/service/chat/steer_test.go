@@ -40,21 +40,6 @@ type steerRecorder struct {
 	landed string
 }
 
-type cancelAfterSteerRecorder struct {
-	*steerRecorder
-	cancel context.CancelFunc
-}
-
-func (s *cancelAfterSteerRecorder) Steer(
-	ctx context.Context,
-	providerTurnID string,
-	msg ports.ChatUserMessage,
-) (ports.ChatTurnRef, error) {
-	ref, err := s.steerRecorder.Steer(ctx, providerTurnID, msg)
-	s.cancel()
-	return ref, err
-}
-
 // interruptCounting replaces the fake's silent cancel with the two facts a real
 // provider reports on session/cancel: which turn it stopped, and the completion
 // that settles the cut turn and releases the promotion's settle wait. The
@@ -1072,6 +1057,16 @@ func TestSteerQueuedTurnWithNothingRunningIsAPlainPromotion(t *testing.T) {
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: "provider-turn-1",
 		Err:            errors.New("provider exploded"),
+	})
+	// The provider events pump projects asynchronously; wait for the durable
+	// settle so the promotion cannot race the completion's ownership handoff.
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.ProviderTurnID == "provider-turn-1" {
+				return turn.State == domain.TurnStateFailed
+			}
+		}
+		return false
 	})
 
 	result, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID)

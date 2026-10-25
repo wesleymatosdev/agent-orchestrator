@@ -396,9 +396,7 @@ func TestTerminalRefreshSupportMatrix(t *testing.T) {
 	for _, harness := range domain.AllHarnesses {
 		supported[string(harness)] = true
 	}
-	// hermes (fork) has no terminal version refresher: its native terminal is
-	// managed outside AO's supervised refresh pipeline.
-	for _, name := range []string{"aider", "continue", "deepseek-harness", "hermes", "memcode", "unreal-agent"} {
+	for _, name := range []string{"aider", "continue", "deepseek-harness", "memcode", "unreal-agent", "hermes"} {
 		supported[name] = false
 	}
 	for _, adapter := range agentregistry.Constructors() {

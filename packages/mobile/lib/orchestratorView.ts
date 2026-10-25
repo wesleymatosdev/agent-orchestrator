@@ -457,9 +457,11 @@ export type ProjectPageStats = { workers: number; needsYou: number; ready: numbe
 export function projectPageStats(
 	sessions: readonly DashboardSession[],
 	orchestrator?: OrchestratorLink | null,
+	/** Archived workers the poll only counted, on a machine that pages its archive. */
+	pagedArchived = 0,
 ): ProjectPageStats {
 	const orchestratorWaiting = orchestrator && orchestrator.isTerminal !== true && agentBlocked({ status: orchestrator.status ?? null });
-	const stats: ProjectPageStats = { workers: 0, needsYou: orchestratorWaiting ? 1 : 0, ready: 0, archived: 0 };
+	const stats: ProjectPageStats = { workers: 0, needsYou: orchestratorWaiting ? 1 : 0, ready: 0, archived: pagedArchived };
 	for (const session of sessions) {
 		// The orchestrator is counted once, from its link above — the session row
 		// of the same agent now rides along in `sessions` and would otherwise be

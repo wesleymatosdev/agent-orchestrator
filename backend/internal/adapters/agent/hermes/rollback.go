@@ -130,6 +130,42 @@ func (p *Plugin) RecordRollbackNote(dataDir, aoSessionID, childID string, droppe
 	return os.WriteFile(filepath.Join(dir, "live-head"), []byte(note), 0o600)
 }
 
+// liveForkLeaf walks the compaction fork chain from start to its live leaf,
+// following each session's newest same-cwd child and stopping at the first
+// leaf that still carries messages. Originally lived in the fork's hermes.go;
+// upstream's rebuilt adapter delegates lineage resolution to Hermes itself,
+// but rollback must resolve the leaf in Go, so the walk is kept here.
+func liveForkLeaf(ctx context.Context, db *sql.DB, start string) (leafID, leafCwd string, leafMessages int, chain []string, ok bool) {
+	current := start
+	chain = []string{start}
+	for depth := 0; depth < 64; depth++ {
+		var cwd string
+		var messages int
+		if err := db.QueryRowContext(ctx, "SELECT COALESCE(cwd,''), (SELECT count(*) FROM messages WHERE session_id=sessions.id) FROM sessions WHERE id=?", current).Scan(&cwd, &messages); err != nil {
+			return "", "", 0, nil, false
+		}
+		var child string
+		err := db.QueryRowContext(ctx, "SELECT child.id FROM sessions child WHERE child.parent_session_id=? AND COALESCE(child.cwd,'')=COALESCE(?,'') ORDER BY child.rowid DESC LIMIT 1", current, cwd).Scan(&child)
+		switch {
+		case err == sql.ErrNoRows:
+			if messages == 0 {
+				return "", "", 0, nil, false
+			}
+			return current, cwd, messages, chain, true
+		case err != nil:
+			return "", "", 0, nil, false
+		}
+		for _, seen := range chain {
+			if seen == child {
+				return "", "", 0, nil, false
+			}
+		}
+		chain = append(chain, child)
+		current = child
+	}
+	return "", "", 0, nil, false
+}
+
 // rollbackLiveHead resolves the compaction fork chain's live leaf for the
 // recorded session id — the same adopt-live-head walk GetRestoreCommand uses —
 // so a rollback lands on the conversation hermes is actually continuing.

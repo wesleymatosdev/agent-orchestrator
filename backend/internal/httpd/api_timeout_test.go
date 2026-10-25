@@ -26,16 +26,6 @@ func remainingRequestBudget(ctx context.Context) time.Duration {
 	return time.Until(deadline)
 }
 
-type timeoutProbeProjectService struct {
-	projectsvc.Manager
-	prepareBudget chan time.Duration
-}
-
-func (s *timeoutProbeProjectService) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
-	s.prepareBudget <- remainingRequestBudget(ctx)
-	return projectsvc.ClonePreparationResult{Path: "/probe/repo", RemoteURL: "https://example.com/owner/repo.git", PreparationID: "probe"}, nil
-}
-
 type timeoutProbeSessionService struct {
 	controllers.SessionService
 	uploadBudget  chan time.Duration
@@ -185,6 +175,47 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 	}
 }
 
+type timeoutProbeProjectManager struct {
+	projectsvc.Manager
+	budget chan time.Duration
+}
+
+func (m *timeoutProbeProjectManager) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return projectsvc.ClonePreparationResult{}, nil
+}
+
+func (m *timeoutProbeProjectManager) Clone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.Project, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return projectsvc.Project{}, errors.New("probe only")
+}
+
+// A clone downloads the whole repository inside the request; a ~500 MB
+// repository took longer than the one-minute REST budget and failed.
+func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
+	mgr := &timeoutProbeProjectManager{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Projects: mgr},
+		ControlDeps{},
+	)
+	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"remoteUrl":"https://github.com/acme/repo","destinationParent":"/tmp"}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+		select {
+		case budget := <-mgr.budget:
+			if budget < 29*time.Minute || budget > 30*time.Minute {
+				t.Fatalf("%s budget = %s, want about 30 minutes", path, budget)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the project manager", path)
+		}
+	}
+}
+
 // A spawn runs the project's Setup inside the request; a Setup step longer than
 // one REST request used to die at the flat deadline ("signal: killed"). The
 // request keeps the ordinary budget until the spawn extends it.
@@ -240,26 +271,3 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 // Cloning a large remote is minutes of real work; the clone routes must get
 // the extended budget, not the configured request timeout that killed large
 // clones at 60s.
-func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
-	svc := &timeoutProbeProjectService{prepareBudget: make(chan time.Duration, 1)}
-	router := NewRouterWithControl(
-		config.Config{RequestTimeout: 250 * time.Millisecond},
-		discardLogger(),
-		nil,
-		APIDeps{Projects: svc},
-		ControlDeps{},
-	)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/clone/prepare",
-		bytes.NewBufferString(`{"remoteUrl":"https://example.com/owner/repo.git","destinationParent":"/tmp/clone-probe"}`))
-	req.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, req)
-	if response.Code != http.StatusOK {
-		t.Fatalf("POST clone/prepare status = %d, want 200; body=%s", response.Code, response.Body.String())
-	}
-	budget := <-svc.prepareBudget
-	if budget < 9*time.Minute || budget > 10*time.Minute {
-		t.Fatalf("clone/prepare budget = %s, want about 10 minutes", budget)
-
-	}
-}

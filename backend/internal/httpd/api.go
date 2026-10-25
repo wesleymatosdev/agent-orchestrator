@@ -259,13 +259,24 @@ func (a *API) Register(root chi.Router) {
 
 		r.Group(func(r chi.Router) {
 			// Large base64 bodies can spend longer than the ordinary REST budget
-			// uploading over a phone connection, and cloning a large remote is
-			// likewise minutes of real work. Only those requests opt in; ordinary
-			// calls to the same routes keep the configured timeout.
+			// uploading over a phone connection. Only attachment-bearing requests
+			// opt in; ordinary calls to the same routes keep the configured timeout.
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
-				extended := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A clone downloads the whole repository inside the request,
+					// which takes minutes for a large repository.
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
+						pattern == "/api/v1/projects/clone/prepare" {
+						clone.ServeHTTP(w, req)
+						return
+					}
+					// A spawn, an orchestrator start or a restore runs the project's
+					// Setup inside the request, and a Setup step may take far longer
+					// than one REST request: the operation extends this budget by its
+					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
 						budget := timeout
 						if attachmentUploadRoute(req) {
@@ -274,8 +285,8 @@ func (a *API) Register(root chi.Router) {
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) || cloneRoute(req) {
-						extended.ServeHTTP(w, req)
+					if attachmentUploadRoute(req) {
+						upload.ServeHTTP(w, req)
 						return
 					}
 					// A managed preview carries the dev server's HMR socket and event
@@ -322,7 +333,6 @@ func (a *API) Register(root chi.Router) {
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.
-		a.projects.RegisterStreams(r)
 		a.notifications.RegisterStream(r)
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
@@ -352,24 +362,6 @@ func attachmentUploadRoute(req *http.Request) bool {
 		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",
 		"/api/v1/reviews/{reviewId}/conversation/messages":
-		return true
-	default:
-		return false
-	}
-}
-
-// cloneRoute reports whether the request is a repository clone operation.
-// Cloning a large remote legitimately runs far longer than the ordinary REST
-// budget (a multi-hundred-MB checkout takes minutes), so clone routes share
-// the extended upload budget instead of the configured request timeout.
-func cloneRoute(req *http.Request) bool {
-	if req.Method != http.MethodPost {
-		return false
-	}
-	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/projects/clone",
-		"/api/v1/projects/clone/prepare",
-		"/api/v1/projects/clone/cleanup":
 		return true
 	default:
 		return false

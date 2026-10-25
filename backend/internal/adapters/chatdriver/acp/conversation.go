@@ -171,6 +171,8 @@ type conversation struct {
 	// normalizeText rewrites user-visible provider text at the AO boundary.
 	// Nil when the binding supplies no mapping.
 	normalizeText func(string) string
+	// plansSpanTurns: see Config.PlansSpanTurns.
+	plansSpanTurns bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
