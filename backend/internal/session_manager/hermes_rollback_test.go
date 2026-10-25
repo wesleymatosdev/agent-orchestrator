@@ -51,7 +51,8 @@ func rollbackFixture(t *testing.T, mutate func(*domain.SessionRecord)) (*Manager
 	seedChatResumeSession(st, domain.ActivityIdle)
 	rec := st.sessions["mer-1"]
 	rec.Harness = domain.HarnessHermes
-	rec.Metadata.AgentSessionID = "native-1"
+	// A chat conversation's native identity is the ACP session id hermes
+	// persists into state.db, recorded as ProviderConversationID by the spawn.
 	if mutate != nil {
 		mutate(&rec)
 	}
@@ -70,7 +71,7 @@ func TestRollbackHermesToForkForksDiscardsAndRePoints(t *testing.T) {
 	if discarded != 3 {
 		t.Fatalf("discarded = %d", discarded)
 	}
-	if fork.gotDataDir != m.dataDir || fork.gotJobID != "mer-1" || fork.gotRecorded != "native-1" ||
+	if fork.gotDataDir != m.dataDir || fork.gotJobID != "mer-1" || fork.gotRecorded != "thread-existing" ||
 		fork.gotPrompt != "second ask" || fork.gotTurnsAfter != 2 {
 		t.Fatalf("fork args: %+v", fork)
 	}
@@ -134,11 +135,14 @@ func (l *hostAliveLauncher) HasLiveChatController(domain.SessionID) bool { retur
 
 func TestRollbackHermesToForkRefusesNonHermesAndBusySessions(t *testing.T) {
 	for name, mutate := range map[string]func(*domain.SessionRecord){
-		"codex":     func(rec *domain.SessionRecord) { rec.Harness = domain.HarnessCodex },
-		"tui":       func(rec *domain.SessionRecord) { rec.Mode = domain.SessionModeTUI },
-		"no-native": func(rec *domain.SessionRecord) { rec.Metadata.AgentSessionID = "" },
-		"active":    func(rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityActive },
-		"blocked":   func(rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityBlocked },
+		"codex": func(rec *domain.SessionRecord) { rec.Harness = domain.HarnessCodex },
+		"tui":   func(rec *domain.SessionRecord) { rec.Mode = domain.SessionModeTUI },
+		"no-native": func(rec *domain.SessionRecord) {
+			rec.Metadata.ProviderConversationID = ""
+			rec.Metadata.AgentSessionID = ""
+		},
+		"active":  func(rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityActive },
+		"blocked": func(rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityBlocked },
 	} {
 		m, _, _ := rollbackFixture(t, mutate)
 		_, err := m.RollbackHermesToFork(context.Background(), "mer-1", "turn-9", "ask", 1)
@@ -149,6 +153,21 @@ func TestRollbackHermesToForkRefusesNonHermesAndBusySessions(t *testing.T) {
 		if !errors.Is(err, want) {
 			t.Fatalf("%s: err = %v, want %v", name, err, want)
 		}
+	}
+}
+
+func TestRollbackHermesToForkFallsBackToTheHandoffIdentity(t *testing.T) {
+	// An interface-handoff chat binds AgentSessionID too; a record whose
+	// ProviderConversationID was lost still forks through the handoff identity.
+	m, _, fork := rollbackFixture(t, func(rec *domain.SessionRecord) {
+		rec.Metadata.ProviderConversationID = ""
+		rec.Metadata.AgentSessionID = "native-1"
+	})
+	if _, err := m.RollbackHermesToFork(context.Background(), "mer-1", "turn-9", "ask", 1); err != nil {
+		t.Fatalf("RollbackHermesToFork: %v", err)
+	}
+	if fork.gotRecorded != "native-1" {
+		t.Fatalf("fork recorded id = %q, want the handoff identity", fork.gotRecorded)
 	}
 }
 
