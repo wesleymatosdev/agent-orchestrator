@@ -1170,12 +1170,19 @@ func (m *Manager) prepareSourceHandoff(
 			return nil
 		}
 		now = time.Now()
-		// Bound the whole contradictory idle regime, not just consecutive
-		// unknown captures. Partial terminal redraws may alternate between safe
-		// and ambiguous forever; neither outcome is enough to stop the source.
+		// Sustained quiet is quiescence (#14): the source reported idle before
+		// the drain, stayed idle for the entire stale-idle budget with the
+		// input gate closed, and never showed a busy surface. A settled
+		// terminal emits no fresh activity facts, so waiting longer cannot
+		// improve the proof — failing here made finished workers permanently
+		// unswitchable. Destroying the source now is the point: it is settled
+		// by observation.
 		if current.Activity.State == domain.ActivityIdle && !idleProven && !surfaceKnownBusy &&
 			!unverifiedIdleSince.IsZero() && now.Sub(unverifiedIdleSince) >= m.interfaceTransition.staleIdleLimit {
-			return errDrainQuiescenceUnverified
+			if cancelProbe != nil {
+				cancelProbe()
+			}
+			return nil
 		}
 		select {
 		case <-ctx.Done():
