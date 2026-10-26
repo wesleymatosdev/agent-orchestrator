@@ -123,8 +123,6 @@ export type DashboardSession = {
 	provisionSteps?: SessionProvisionStep[];
 	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
 	branchNaming?: boolean;
-	/** worker or orchestrator. Absent from rows built before the daemon named kinds. */
-	kind?: string;
 	/** When the stored row last changed. The archive is ordered by it, as on desktop. */
 	updatedAt?: string;
 	isPinned?: boolean;
@@ -379,7 +377,6 @@ function mapSession(s: WireSession): DashboardSession {
 		branchNaming: !!s.branchNaming,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
-		kind: s.kind || undefined,
 		updatedAt: s.updatedAt || undefined,
 		autoReviewEnabled: !!s.autoReviewEnabled,
 		autoInjectReview: s.autoInjectReview ?? true,
