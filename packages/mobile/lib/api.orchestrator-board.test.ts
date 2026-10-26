@@ -36,7 +36,9 @@ const terminatedOrchestrator = {
 
 function mockDaemon() {
 	vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
-		const path = String(url);
+		// getSessions pages the archive, so the sessions route carries a query
+		// string — match on the path, not the whole URL.
+		const path = String(url).split("?")[0];
 		if (path.endsWith("/api/v1/sessions")) {
 			return new Response(JSON.stringify({ sessions: [worker, terminatedOrchestrator] }));
 		}
