@@ -288,34 +288,34 @@ test.describe("Ask in chat from highlighted code", () => {
 		await expect(askButton(page)).toBeHidden();
 	});
 
-test("shift+click extends the highlight across lines", async ({ page }) => {
-	const { composer } = await openChatSession(page);
-	await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4));
-	await expect(askButton(page)).toBeVisible();
-	const box = (await row(page, REVIEW, 6).boundingBox())!;
-	await page.keyboard.down("Shift");
-	await page.mouse.click(box.x + 60, box.y + box.height / 2);
-	await page.keyboard.up("Shift");
-	await expect(askButton(page)).toBeVisible();
-	await page.keyboard.press("ControlOrMeta+L");
-	await expect(composer).toContainText("retry.ts#L2-L6");
-});
-
-test("a redraw mid-drag keeps the selection", async ({ page }) => {
-	const { composer } = await openChatSession(page);
-	await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
-	// Replace every row with a fresh copy WHILE the button is still held, as
-	// Pierre does when a loaded highlighter re-tokenizes or a snapshot lands.
-	await page.locator(`${REVIEW} diffs-container`).first().evaluate((host) => {
-		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
-			column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
-		}
+	test("shift+click extends the highlight across lines", async ({ page }) => {
+		const { composer } = await openChatSession(page);
+		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4));
+		await expect(askButton(page)).toBeVisible();
+		const box = (await row(page, REVIEW, 6).boundingBox())!;
+		await page.keyboard.down("Shift");
+		await page.mouse.click(box.x + 60, box.y + box.height / 2);
+		await page.keyboard.up("Shift");
+		await expect(askButton(page)).toBeVisible();
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(composer).toContainText("retry.ts#L2-L6");
 	});
-	await page.mouse.up();
-	await expect(askButton(page)).toBeVisible();
-	await page.keyboard.press("ControlOrMeta+L");
-	await expect(composer).toContainText("retry.ts#L2-L4");
-});
+	
+	test("a redraw mid-drag keeps the selection", async ({ page }) => {
+		const { composer } = await openChatSession(page);
+		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
+		// Replace every row with a fresh copy WHILE the button is still held, as
+		// Pierre does when a loaded highlighter re-tokenizes or a snapshot lands.
+		await page.locator(`${REVIEW} diffs-container`).first().evaluate((host) => {
+			for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+				column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
+			}
+		});
+		await page.mouse.up();
+		await expect(askButton(page)).toBeVisible();
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(composer).toContainText("retry.ts#L2-L4");
+	});
 
 test("the gutter + still opens the single-line feedback composer, and sits clear of the code and the line number", async ({ page }) => {
 		await openChatSession(page);
