@@ -223,6 +223,18 @@ function SpawnModalContent() {
 		return () => { cancelled = true; polling.abort(); };
 	}, [config, harness, projectId, reloadKey, selectedHostId]);
 
+	// A model picked in one scope can be absent from the other scope's catalog.
+	// Keep the pick while it stays valid; when it doesn't, name the loss and
+	// fall back to Automatic instead of silently swapping it — or worse,
+	// spawning a model the new scope cannot run.
+	useEffect(() => {
+		if (!modelTouched || !model || !modelCatalog || modelLoading) return;
+		if (modelCatalog.models.some((item) => item.id === model)) return;
+		setModel("");
+		setModelTouched(false);
+		setModelError(`"${model}" isn't available for the new target. Model reset to Automatic.`);
+	}, [model, modelCatalog, modelLoading, modelTouched]);
+
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
 	// endpoint that keeps failing while connected can't loop.
@@ -257,10 +269,15 @@ function SpawnModalContent() {
 	};
 	const changeProject = (nextProjectId: string | null) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
-		resetModelSource();
+		// The harness and model a user picked are orthogonal to project scope:
+		// toggling project ↔ standalone keeps them. Only the untouched defaults
+		// re-resolve for the new scope (the agent effect below, and the project
+		// pin in resolveSpawnModel). Clearing the catalog here only drops the
+		// outgoing scope's model list while the new one loads.
+		setModelCatalog(undefined);
+		setModelError(undefined);
 		setProjectDetail(undefined);
 		setProjectDetailLoadedFor(null);
-		setAgentTouched(false);
 		setProjectId(nextProjectId);
 	};
 	const selectAgent = (nextHarness: string) => {
