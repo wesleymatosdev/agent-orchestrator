@@ -3,18 +3,18 @@ INSERT INTO session_interface_transitions (
     id, session_id, source_mode, target_mode, policy, history_policy, phase,
     native_conversation_id, error_code, error_detail,
     created_at, updated_at, completed_at, notice_acknowledged_at,
-    source_account_id, target_account_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, NULL, NULL, ?, ?)
+    source_account_id, target_account_id, degraded_kind
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, NULL, NULL, ?, ?, ?)
 RETURNING id, session_id, source_mode, target_mode, policy, phase,
           native_conversation_id, error_code, error_detail,
           created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
-       source_account_id, target_account_id;
+       source_account_id, target_account_id, degraded_kind;
 
 -- name: GetSessionInterfaceTransition :one
 SELECT id, session_id, source_mode, target_mode, policy, phase,
        native_conversation_id, error_code, error_detail,
        created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
-       source_account_id, target_account_id
+       source_account_id, target_account_id, degraded_kind
 FROM session_interface_transitions
 WHERE id = ?;
 
@@ -22,7 +22,7 @@ WHERE id = ?;
 SELECT id, session_id, source_mode, target_mode, policy, phase,
        native_conversation_id, error_code, error_detail,
        created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
-       source_account_id, target_account_id
+       source_account_id, target_account_id, degraded_kind
 FROM session_interface_transitions
 WHERE session_id = ?
   AND phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required')
@@ -33,7 +33,7 @@ LIMIT 1;
 SELECT id, session_id, source_mode, target_mode, policy, phase,
        native_conversation_id, error_code, error_detail,
        created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
-       source_account_id, target_account_id
+       source_account_id, target_account_id, degraded_kind
 FROM session_interface_transitions
 WHERE session_id = ?
 -- Tests and injected clocks can assign multiple sagas the same timestamp.
@@ -46,7 +46,7 @@ LIMIT 1;
 SELECT id, session_id, source_mode, target_mode, policy, phase,
        native_conversation_id, error_code, error_detail,
        created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
-       source_account_id, target_account_id
+       source_account_id, target_account_id, degraded_kind
 FROM session_interface_transitions
 WHERE phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required')
 ORDER BY created_at;
@@ -55,7 +55,7 @@ ORDER BY created_at;
 SELECT t.id, t.session_id, t.source_mode, t.target_mode, t.policy, t.phase,
        t.native_conversation_id, t.error_code, t.error_detail,
        t.created_at, t.updated_at, t.completed_at, t.notice_acknowledged_at, t.history_policy,
-       t.source_account_id, t.target_account_id
+       t.source_account_id, t.target_account_id, t.degraded_kind
 FROM session_interface_transitions AS t
 WHERE t.phase IN ('completed', 'failed', 'cancelled', 'recovery_required')
   AND EXISTS (
@@ -83,7 +83,7 @@ WHERE id = sqlc.arg(id)
 RETURNING id, session_id, source_mode, target_mode, policy, phase,
           native_conversation_id, error_code, error_detail,
           created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
-       source_account_id, target_account_id;
+       source_account_id, target_account_id, degraded_kind;
 
 -- name: EnqueueSessionInterfaceTransitionMessage :exec
 INSERT INTO session_interface_transition_messages (

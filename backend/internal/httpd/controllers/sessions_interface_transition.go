@@ -129,7 +129,8 @@ func sessionInterfaceTransitionView(transition domain.SessionInterfaceTransition
 		SourceMode: transition.SourceMode, TargetMode: transition.TargetMode,
 		Policy: transition.Policy, HistoryPolicy: transition.HistoryPolicy, Phase: transition.Phase,
 		SourceAccountID: transition.SourceAccountID, TargetAccountID: transition.TargetAccountID,
-		ErrorCode: transition.ErrorCode, ErrorDetail: transition.ErrorDetail,
+		DegradedKind: transition.DegradedKind,
+		ErrorCode:    transition.ErrorCode, ErrorDetail: transition.ErrorDetail,
 		CreatedAt: transition.CreatedAt, UpdatedAt: transition.UpdatedAt,
 		CompletedAt: completedAt, NoticeAcknowledgedAt: noticeAcknowledgedAt,
 	}

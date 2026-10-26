@@ -40,6 +40,7 @@ func (s *Store) CreateSessionInterfaceTransition(
 		UpdatedAt:            rec.UpdatedAt,
 		SourceAccountID:      rec.SourceAccountID,
 		TargetAccountID:      rec.TargetAccountID,
+		DegradedKind:         rec.DegradedKind,
 	})
 	if err == nil {
 		return interfaceTransitionToDomain(row), true, nil
@@ -90,6 +91,7 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 			Phase: rec.Phase, NativeConversationID: rec.NativeConversationID,
 			CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
 			SourceAccountID: rec.SourceAccountID, TargetAccountID: rec.TargetAccountID,
+			DegradedKind: rec.DegradedKind,
 		})
 		if insertErr == nil {
 			transition, created = interfaceTransitionToDomain(row), true
@@ -457,7 +459,8 @@ func interfaceTransitionToDomain(row gen.SessionInterfaceTransition) domain.Sess
 		Policy: row.Policy, HistoryPolicy: row.HistoryPolicy, Phase: row.Phase,
 		NativeConversationID: row.NativeConversationID,
 		SourceAccountID:      row.SourceAccountID, TargetAccountID: row.TargetAccountID,
-		ErrorCode: row.ErrorCode, ErrorDetail: row.ErrorDetail,
+		DegradedKind: row.DegradedKind,
+		ErrorCode:    row.ErrorCode, ErrorDetail: row.ErrorDetail,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		CompletedAt:          nullTimeToTime(row.CompletedAt),
 		NoticeAcknowledgedAt: nullTimeToTime(row.NoticeAcknowledgedAt),

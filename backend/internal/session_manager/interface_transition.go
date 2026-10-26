@@ -204,6 +204,12 @@ func (m *Manager) StartInterfaceTransition(
 	if err != nil {
 		return domain.SessionInterfaceTransition{}, err
 	}
+	// An identity-reset handoff is admitted with no native conversation: the
+	// target starts a fresh Chat conversation instead of resuming one.
+	var degradedKind string
+	if nativeID == "" && m.hermesIdentityDegraded(rec, source) {
+		degradedKind = domain.SessionInterfaceTransitionDegradedIdentityReset
+	}
 	expectedPredecessorID := ""
 	if historyPolicy == domain.SessionInterfaceTransitionHistoryProvider {
 		latest, found, latestErr := store.GetLatestSessionInterfaceTransition(ctx, id)
@@ -220,7 +226,7 @@ func (m *Manager) StartInterfaceTransition(
 	pending := domain.SessionInterfaceTransition{
 		ID: m.newLaunchID(), SessionID: id, SourceMode: source, TargetMode: target,
 		Policy: policy, HistoryPolicy: historyPolicy, Phase: domain.SessionInterfaceTransitionRequested,
-		NativeConversationID: nativeID, CreatedAt: now, UpdatedAt: now,
+		NativeConversationID: nativeID, DegradedKind: degradedKind, CreatedAt: now, UpdatedAt: now,
 	}
 	var transition domain.SessionInterfaceTransition
 	var created bool
@@ -683,6 +689,9 @@ func (m *Manager) runInterfaceTransition(
 			"sessionID", rec.ID, "transitionID", transition.ID, "error", err)
 		return
 	}
+	// Queue the boundary marker only once completion is durable, so a failed or
+	// rolled-back handoff never delivers it into a restored source controller.
+	m.enqueueDegradedHandoffMarker(transition)
 }
 
 // handoffNativeConversationID is the readiness check shared by status and
@@ -700,6 +709,53 @@ func (m *Manager) handoffNativeConversationID(
 	return m.persistedNativeConversationID(ctx, rec, id, handoff)
 }
 
+// hermesIdentityDegraded reports a hermes Terminal session whose installed
+// adapter never declared the compatible TUI+Chat identity pair. Upstream hermes
+// main has no identity chain, so the strict handoff gate would refuse every
+// switch regardless of session state. Such a switch degrades to a fresh Chat
+// start instead of failing: the Chat target opens a new conversation and the
+// native history stays in Terminal. Handoffs whose adapter CAN prove identity
+// keep the strict path, and Chat→TUI switches are untouched.
+func (m *Manager) hermesIdentityDegraded(rec domain.SessionRecord, mode domain.SessionMode) bool {
+	if rec.Harness != domain.HarnessHermes || mode != domain.SessionModeTUI {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	_, declared := agent.(ports.AgentInterfaceHandoff)
+	return !declared
+}
+
+// degradedHandoffMarkerText is the boundary turn delivered into the fresh Chat
+// conversation after a degraded identity-reset handoff completes, so the
+// timeline states honestly that native history did not transfer.
+const degradedHandoffMarkerText = "Chat started fresh — the terminal's native history stays in Terminal."
+
+// enqueueDegradedHandoffMarker queues the fresh-start boundary turn through the
+// transition outbox. settleTransitionMessages delivers it into the new Chat
+// controller after activation, so the marker rides the same durable machinery
+// as every other transition message.
+func (m *Manager) enqueueDegradedHandoffMarker(transition domain.SessionInterfaceTransition) {
+	if transition.DegradedKind == "" {
+		return
+	}
+	store, ok := m.store.(interfaceTransitionStore)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionStepLimit)
+	defer cancel()
+	if err := store.EnqueueSessionInterfaceTransitionMessage(
+		ctx, transition.ID, "interface-transition:"+m.newLaunchID(), degradedHandoffMarkerText,
+		m.clock(), ports.MessageDeliveryOptions{},
+	); err != nil {
+		m.logger.Error("interface transition: queue degraded handoff marker",
+			"transitionID", transition.ID, "error", err)
+	}
+}
+
 // nativeConversationID resolves the adapter's native conversation id for the
 // session's current interface. A missing id requires positive untouched-terminal
 // or durable empty-Chat proof. Chat may also reserve a ProviderConversationID
@@ -714,12 +770,20 @@ func (m *Manager) nativeConversationID(
 	if !ok {
 		return "", nil, fmt.Errorf("%w: no adapter for %s", ErrInterfaceHandoffUnsupported, rec.Harness)
 	}
-	handoff, ok := agent.(ports.AgentInterfaceHandoff)
-	if !ok {
+	mode := domain.NormalizeSessionMode(rec.Mode)
+	handoff, declared := agent.(ports.AgentInterfaceHandoff)
+	if !declared {
+		if m.hermesIdentityDegraded(rec, mode) {
+			// The installed hermes never declares a compatible TUI+Chat
+			// identity pair, so a refusal would make every TUI→Chat switch
+			// impossible regardless of session state. Degrade instead: the
+			// empty id sends the handoff through the durable fresh-start path
+			// and the native history stays with the Terminal.
+			return "", nil, nil
+		}
 		return "", nil, fmt.Errorf("%w: %s has not declared compatible TUI and Chat identities",
 			ErrInterfaceHandoffUnsupported, rec.Harness)
 	}
-	mode := domain.NormalizeSessionMode(rec.Mode)
 	ref := ports.SessionRef{
 		ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
 		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},

@@ -6602,6 +6602,7 @@ export interface components {
             completedAt?: null | string;
             /** Format: date-time */
             createdAt: string;
+            degradedKind?: string;
             errorCode?: string;
             errorDetail?: string;
             /** @enum {string} */

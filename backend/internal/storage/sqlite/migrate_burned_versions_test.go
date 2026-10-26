@@ -213,6 +213,7 @@ var shippedMigrations = map[int64]string{
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
+	20261026182402270: "20261026182402270_session_interface_transition_degraded_kind.sql",
 	199:               "0199_conversation_message_continuation.sql",
 	200:               "0200_session_artifact_version_source.sql",
 	202:               "0202_allow_memcode_harness.sql",

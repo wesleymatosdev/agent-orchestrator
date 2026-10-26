@@ -18811,6 +18811,8 @@ components:
         createdAt:
           format: date-time
           type: string
+        degradedKind:
+          type: string
         errorCode:
           type: string
         errorDetail:

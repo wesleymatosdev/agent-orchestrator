@@ -1123,8 +1123,11 @@ type SessionInterfaceTransitionView struct {
 	Phase         domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
 	// SourceAccountID and TargetAccountID are set when the handoff moves the
 	// agent to another provider account; the mode then stays the same.
-	SourceAccountID      string     `json:"sourceAccountId,omitempty"`
-	TargetAccountID      string     `json:"targetAccountId,omitempty"`
+	SourceAccountID string `json:"sourceAccountId,omitempty"`
+	TargetAccountID string `json:"targetAccountId,omitempty"`
+	// DegradedKind records a handoff that completed by starting the target
+	// fresh instead of transferring native history ("identity-reset").
+	DegradedKind         string     `json:"degradedKind,omitempty"`
 	ErrorCode            string     `json:"errorCode,omitempty"`
 	ErrorDetail          string     `json:"errorDetail,omitempty"`
 	CreatedAt            time.Time  `json:"createdAt"`
