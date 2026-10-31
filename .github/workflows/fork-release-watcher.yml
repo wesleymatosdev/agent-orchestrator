@@ -1,0 +1,71 @@
+# Fork release watcher: produce fork releases from the upstream PR branch.
+# Scheduled workflows only run from the repository's default branch, and the
+# upstream PR branch must stay clean of fork-only CI, so this watcher (once
+# this file lands on main) polls feat/hermes-agent-harness's tip every five
+# minutes and dispatches fork-release.yml when that tip is not yet released.
+# Manual kick: gh workflow run fork-release-watcher.yml
+name: Fork release watcher
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: fork-release-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      # Dispatch memo: a release takes well over one watcher interval to build
+      # and publish, so between "dispatched" and "released" this cache (not the
+      # release notes) is what stops duplicate dispatches. Evicted entries are
+      # harmless: by then the release exists and the notes check below catches
+      # the already-released tip.
+      - uses: actions/cache@v4
+        with:
+          path: watcher-state
+          key: fork-release-watcher-${{ github.run_id }}
+          restore-keys: fork-release-watcher-
+
+      - name: Dispatch a release for unreleased tips
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WATCHED_BRANCH: feat/hermes-agent-harness
+          # fork-release.yml must exist on the ref it dispatches against. Once
+          # this watcher lands on main it should land together with the
+          # retargeted fork-release.yml there (dispatch without --ref resolves
+          # reliably); the --ref fallback covers dispatching it straight off
+          # plus/hermes-adapter before that copy lands. Both copies release the
+          # same thing: the pipeline is fully parameterized by the ref input.
+          WORKFLOW_REF: plus/hermes-adapter
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${WATCHED_BRANCH}" --jq .object.sha)"
+          short="${sha::10}"
+          echo "watched tip: $sha"
+
+          body="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .body 2>/dev/null || echo '')"
+          if [[ "$body" == *"$short"* ]]; then
+            echo "tip ${short} is already released; nothing to do"
+            exit 0
+          fi
+          if [ -f watcher-state/dispatched.sha ] && grep -q "$short" watcher-state/dispatched.sha; then
+            echo "tip ${short} already dispatched; release still building"
+            exit 0
+          fi
+
+          echo "tip ${short} is unreleased; dispatching fork-release.yml"
+          if ! gh workflow run fork-release.yml -f ref="$sha" 2>dispatch.err; then
+            echo "default-branch dispatch failed; falling back to ${WORKFLOW_REF}"
+            cat dispatch.err >&2
+            gh workflow run fork-release.yml --ref "$WORKFLOW_REF" -f ref="$sha"
+          fi
+          mkdir -p watcher-state
+          echo "$sha" >> watcher-state/dispatched.sha

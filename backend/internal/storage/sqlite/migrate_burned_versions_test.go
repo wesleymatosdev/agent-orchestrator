@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"reflect"
 	"strings"
 	"testing"
@@ -214,6 +215,13 @@ var shippedMigrations = map[int64]string{
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
 	20261026182402270: "20261026182402270_session_interface_transition_degraded_kind.sql",
+	// 20261031161839997 is fork-only equivalence bookkeeping, not schema: the
+	// upstream hermes-agent-harness branch ships the degraded_kind column as
+	// 20261031021251693 while the fork shipped the identical column as
+	// 20261026182402270. The migration marks the upstream version applied when
+	// the column is physically present, so a daemon built from that branch
+	// opens a fork database instead of dying on a duplicate column name.
+	20261031161839997: "20261031161839997_session_interface_transitions_degraded_kind_upstream_equivalence.sql",
 	199:               "0199_conversation_message_continuation.sql",
 	200:               "0200_session_artifact_version_source.sql",
 	202:               "0202_allow_memcode_harness.sql",
@@ -359,6 +367,118 @@ SELECT COUNT(*) FROM (
 	}
 	if err := migrate(db); err != nil {
 		t.Fatalf("repeat migration over a foreign interleaved version: %v", err)
+	}
+}
+
+// The fork shipped session_interface_transitions.degraded_kind as
+// 20261026182402270; the upstream hermes-agent-harness branch ships the
+// identical column as 20261031021251693. The fork-only equivalence migration
+// marks the upstream version applied wherever the column is physically
+// present, so a daemon built from the upstream branch opens the database
+// instead of failing on a duplicate column name.
+const (
+	forkDegradedKindMigrationVersion     int64 = 20261026182402270
+	upstreamDegradedKindMigrationVersion int64 = 20261031021251693
+)
+
+func countDegradedKindLedgerRows(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`,
+		upstreamDegradedKindMigrationVersion,
+	).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	return applied
+}
+
+func countDegradedKindColumns(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var columns int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('session_interface_transitions') WHERE name = 'degraded_kind'`,
+	).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	return columns
+}
+
+// TestDegradedKindEquivalenceMarksForkDatabasesForUpstreamBuilds reproduces
+// the production profile: the fork migration added the column under its own
+// version, so a build from the upstream branch would re-add it and take the
+// daemon down. The equivalence migration must record the upstream version so
+// that build skips its file.
+func TestDegradedKindEquivalenceMarksForkDatabasesForUpstreamBuilds(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 215)
+	if _, err := db.Exec(
+		`ALTER TABLE session_interface_transitions ADD COLUMN degraded_kind TEXT NOT NULL DEFAULT ''`,
+	); err != nil {
+		t.Fatalf("seed fork column: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
+		forkDegradedKindMigrationVersion,
+	); err != nil {
+		t.Fatalf("seed fork migration record: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate fork profile: %v", err)
+	}
+	if got := countDegradedKindLedgerRows(t, db); got != 1 {
+		t.Fatalf("upstream degraded-kind version recorded %d times, want exactly 1", got)
+	}
+	if got := countDegradedKindColumns(t, db); got != 1 {
+		t.Fatalf("degraded_kind column count = %d, want exactly 1", got)
+	}
+
+	// The marker is idempotent: a second startup never duplicates the row.
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate on marked profile: %v", err)
+	}
+	if got := countDegradedKindLedgerRows(t, db); got != 1 {
+		t.Fatalf("upstream degraded-kind version recorded %d times after repeat, want exactly 1", got)
+	}
+}
+
+// TestDegradedKindEquivalenceCoversFreshForkInstalls keeps a fresh fork-line
+// install switchable to upstream builds: the fork migration adds the column
+// and the equivalence migration records the upstream version in the same pass.
+func TestDegradedKindEquivalenceCoversFreshForkInstalls(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 215)
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate fresh fork install: %v", err)
+	}
+	if got := countDegradedKindColumns(t, db); got != 1 {
+		t.Fatalf("degraded_kind column count = %d, want exactly 1", got)
+	}
+	if got := countDegradedKindLedgerRows(t, db); got != 1 {
+		t.Fatalf("upstream degraded-kind version recorded %d times, want exactly 1", got)
+	}
+}
+
+// TestDegradedKindEquivalenceLeavesColumnlessDatabasesAlone pins the physical
+// guard: a database that does not actually have the column must not record the
+// upstream version, or an upstream build would silently skip the real
+// migration and the column would never appear.
+func TestDegradedKindEquivalenceLeavesColumnlessDatabasesAlone(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 215)
+	if _, err := db.Exec(
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
+		forkDegradedKindMigrationVersion,
+	); err != nil {
+		t.Fatalf("seed fork migration record: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate columnless profile: %v", err)
+	}
+	if got := countDegradedKindLedgerRows(t, db); got != 0 {
+		t.Fatalf("upstream degraded-kind version recorded %d times without the column, want 0", got)
+	}
+	if got := countDegradedKindColumns(t, db); got != 0 {
+		t.Fatalf("degraded_kind column count = %d on a columnless profile, want 0", got)
 	}
 }
 
