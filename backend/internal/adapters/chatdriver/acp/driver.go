@@ -371,11 +371,14 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// sessions; it just cannot be resumed after a disconnect. The resume
 	// capability is downgraded in conversationCapabilities, and Resume()
 	// returns ErrChatResumeFailed if called.
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
+	additional, dropped, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
 		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
 	if err != nil {
 		conv.discard()
 		return nil, err
+	}
+	if dropped > 0 {
+		d.log.Warn("ACP agent lacks additional-directories support; dropped workspace directories already covered by the session cwd", "sessionID", cfg.SessionID, "dropped", dropped)
 	}
 	mcpServers, err := normalizeMCPServers(cfg.MCPServers, init.AgentCapabilities.McpCapabilities)
 	if err != nil {
@@ -582,7 +585,7 @@ func (d *Driver) resumeSession(
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
+	additional, dropped, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
 		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
 	if err != nil {
 		conv.discard()
@@ -590,6 +593,9 @@ func (d *Driver) resumeSession(
 			return nil, normalizeACPError("ACP session/resume", err)
 		}
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
+	}
+	if dropped > 0 {
+		d.log.Warn("ACP agent lacks additional-directories support; dropped workspace directories already covered by the session cwd", "sessionID", launchCfg.SessionID, "dropped", dropped)
 	}
 	mcpServers, err := normalizeMCPServers(cfg.MCPServers, init.AgentCapabilities.McpCapabilities)
 	if err != nil {

@@ -11,27 +11,57 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func normalizeAdditionalDirectories(cwd string, directories []string, supported bool) ([]string, error) {
+// normalizeAdditionalDirectories resolves the extra workspace roots sent on
+// session/new, session/load, session/resume, and session/fork. An agent that
+// does not advertise the additional_directories session capability can still
+// reach every path nested inside its launch cwd, and AO workspace projects
+// only ever add child worktrees created strictly under the workspace root
+// (gitworktree.Workspace.CreateWorkspaceProject), so under-cwd directories
+// degrade to a dropped count instead of failing the session. A directory
+// outside the cwd genuinely needs the capability and stays a hard error.
+// The second return value counts unique under-cwd directories dropped for a
+// non-advertising agent, so callers can log the degradation.
+func normalizeAdditionalDirectories(cwd string, directories []string, supported bool) ([]string, int, error) {
 	if len(directories) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
-	if !supported {
-		return nil, fmt.Errorf("ACP agent does not support additional workspace directories")
-	}
-	seen := map[string]struct{}{filepath.Clean(cwd): {}}
+	root := filepath.Clean(cwd)
+	seen := map[string]struct{}{root: {}}
 	out := make([]string, 0, len(directories))
+	outside := make([]string, 0)
+	dropped := 0
 	for _, directory := range directories {
 		if !filepath.IsAbs(directory) {
-			return nil, fmt.Errorf("additional workspace directory must be absolute, got %q", directory)
+			return nil, 0, fmt.Errorf("additional workspace directory must be absolute, got %q", directory)
 		}
 		clean := filepath.Clean(directory)
 		if _, duplicate := seen[clean]; duplicate {
 			continue
 		}
 		seen[clean] = struct{}{}
-		out = append(out, clean)
+		if supported {
+			out = append(out, clean)
+			continue
+		}
+		if directoryInsideRoot(root, clean) {
+			dropped++
+			continue
+		}
+		outside = append(outside, clean)
 	}
-	return out, nil
+	if len(outside) > 0 {
+		return nil, 0, fmt.Errorf("ACP agent does not support additional workspace directories outside %s (%s)", root, strings.Join(outside, ", "))
+	}
+	if len(out) == 0 {
+		out = nil
+	}
+	return out, dropped, nil
+}
+
+// directoryInsideRoot reports whether clean is the root itself or one of its
+// descendants. Both paths must already be filepath.Clean'd.
+func directoryInsideRoot(root, clean string) bool {
+	return clean == root || strings.HasPrefix(clean, root+string(filepath.Separator))
 }
 
 func normalizeMCPServers(configs []ports.ChatMCPServerConfig, caps acpsdk.McpCapabilities) ([]acpsdk.McpServer, error) {

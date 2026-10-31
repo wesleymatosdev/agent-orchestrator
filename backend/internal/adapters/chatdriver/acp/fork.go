@@ -52,11 +52,14 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent does not advertise resumable session/fork", ports.ErrChatCapabilityUnavailable)
 	}
-	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
+	additional, dropped, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
 		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
 	if err != nil {
 		conv.discard()
 		return nil, err
+	}
+	if dropped > 0 {
+		d.log.Warn("ACP agent lacks additional-directories support; dropped workspace directories already covered by the session cwd", "sessionID", cfg.SessionID, "dropped", dropped)
 	}
 	mcpServers, err := normalizeMCPServers(cfg.MCPServers, init.AgentCapabilities.McpCapabilities)
 	if err != nil {

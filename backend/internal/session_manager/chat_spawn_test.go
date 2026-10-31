@@ -335,6 +335,55 @@ func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 	}
 }
 
+// TestChatSpawn_WorkspaceProjectSendsNestedChildWorktreesAsAdditionalDirectories
+// pins the workspace-project chat launch contract the hermes multi-repo
+// diagnosis hinged on: every additional directory is a child worktree created
+// strictly under the session workspace root (gitworktree nests them at
+// filepath.Join(rootPath, rel)), so a driver without ACP additional-directories
+// support can safely drop them — the launch cwd already covers the files.
+func TestChatSpawn_WorkspaceProjectSendsNestedChildWorktreesAsAdditionalDirectories(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.browserCapabilities = browsersvc.NewAuthority()
+	project := st.projects[string(chatTestProject)]
+	project.Kind = domain.ProjectKindWorkspace
+	st.projects[string(chatTestProject)] = project
+	ws := m.workspace.(*fakeWorkspace)
+	ws.path = t.TempDir()
+	ws.projectCreateInfo = ports.WorkspaceProjectInfo{
+		Root: ports.WorkspaceInfo{Path: ws.path, Branch: "ao/task", SessionID: "mer-1", ProjectID: chatTestProject},
+		Worktrees: []ports.WorkspaceRepoInfo{
+			{RepoName: domain.RootWorkspaceRepoName, Path: ws.path, Branch: "ao/task", SessionID: "mer-1", ProjectID: chatTestProject, RepoPath: project.Path},
+			{RepoName: "api", Path: filepath.Join(ws.path, "api"), Branch: "ao/task", SessionID: "mer-1", ProjectID: chatTestProject, RepoPath: project.Path},
+			{RepoName: "migrator", Path: filepath.Join(ws.path, "migrator"), Branch: "ao/task", SessionID: "mer-1", ProjectID: chatTestProject, RepoPath: project.Path},
+		},
+	}
+
+	if _, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		Prompt: "fix api", RequestedMode: domain.SessionModeChat,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	if len(launcher.started) == 0 {
+		t.Fatal("chat never started")
+	}
+	start := launcher.started[0]
+	if start.WorkspacePath != ws.path {
+		t.Fatalf("workspace path = %q, want %q", start.WorkspacePath, ws.path)
+	}
+	want := []string{filepath.Join(ws.path, "api"), filepath.Join(ws.path, "migrator")}
+	if !reflect.DeepEqual(start.AdditionalDirectories, want) {
+		t.Fatalf("additional directories = %#v, want %#v (root excluded, children in order)", start.AdditionalDirectories, want)
+	}
+	for _, dir := range start.AdditionalDirectories {
+		if !strings.HasPrefix(dir, start.WorkspacePath+string(filepath.Separator)) {
+			t.Fatalf("additional directory %q is outside the workspace root %q", dir, start.WorkspacePath)
+		}
+	}
+}
+
 type generationClaimFailureLauncher struct {
 	*recordingLauncher
 	store      *fakeStore
