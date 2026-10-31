@@ -1,7 +1,9 @@
-# Fork release: on every update of plus/hermes-adapter, build all desktop
-# targets, generate electron-updater feeds, and publish a GitHub release so
-# installed fork builds auto-update. Unsigned (no Apple/Windows certs yet) —
-# wire signing into the publish step when credentials exist.
+# Fork release: build all desktop targets, generate electron-updater feeds,
+# and publish a GitHub release so installed fork builds auto-update. Release
+# sources: pushes to plus/hermes-adapter, the fork-release-watcher schedule
+# (feat/hermes-agent-harness tips), and manual `gh workflow run` with a ref.
+# Unsigned (no Apple/Windows certs yet) — wire signing into the publish step
+# when credentials exist.
 name: Fork release
 
 on:
@@ -9,10 +11,20 @@ on:
     branches: [plus/hermes-adapter]
     paths-ignore: ["**.md", ".github/**"]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git SHA to build and release (default: the ref this run dispatches against)"
+        type: string
+        required: false
 
 permissions:
   contents: write
   actions: write
+
+env:
+  # The commit being released. Push events release their own head; manual and
+  # watcher dispatches pass the target SHA via the `ref` input.
+  RELEASE_REF: ${{ inputs.ref || github.sha }}
 
 jobs:
   release:
@@ -29,10 +41,10 @@ jobs:
       - name: Dispatch desktop build and wait
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
           VERSION: 0.13.${{ github.run_number }}
         run: |
-          gh workflow run build-artifacts.yml --ref plus/hermes-adapter -f ref="$SHA" -f version="$VERSION"
+          echo "releasing $RELEASE_REF as $VERSION"
+          gh workflow run build-artifacts.yml --ref plus/hermes-adapter -f ref="$RELEASE_REF" -f version="$VERSION"
           sleep 15
           RUN_ID=$(gh run list --workflow build-artifacts.yml --limit 1 --json databaseId --jq '.[0].databaseId')
           echo "BUILD_RUN=$RUN_ID" >> "$GITHUB_ENV"
@@ -102,7 +114,9 @@ jobs:
           TAG: hermes-v0.13.${{ github.run_number }}
           VERSION: 0.13.${{ github.run_number }}
         run: |
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "Agent Orchestrator (hermes fork) $VERSION" --notes "Automated fork release from plus/hermes-adapter at ${GITHUB_SHA::10}. Unsigned builds; see the fork README for install caveats." --latest
+          # The release notes carry the released commit's short SHA: the fork
+          # release watcher reads them to decide whether a tip already shipped.
+          gh release create "$TAG" --target "$RELEASE_REF" --title "Agent Orchestrator (hermes fork) $VERSION" --notes "Automated fork release from commit ${RELEASE_REF::10}. Unsigned builds; see the fork README for install caveats." --latest
           gh release upload "$TAG" \
             dist/mac-arm64/agent-orchestrator-darwin-arm64.zip \
             dist/mac-x64/agent-orchestrator-darwin-x64.zip \
