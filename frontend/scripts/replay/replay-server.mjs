@@ -481,8 +481,8 @@ async function main() {
 					const file = resolve(frontendDir, "scripts/replay/fixtures/perc/ep-link-preview.json");
 					if (existsSync(file)) {
 						const captured = JSON.parse(readFileSync(file, "utf8"));
-						const url = url.searchParams.get("url") ?? "";
-						if (captured.url === url) {
+						const previewUrl = url.searchParams.get("url") ?? "";
+						if (captured.url === previewUrl) {
 							sendJson(200, captured);
 							return;
 						}
