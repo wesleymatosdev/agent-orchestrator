@@ -474,6 +474,22 @@ async function main() {
 					sendJson(200, { notifications: [], unreadCount: 0, unresolvedCount: 0 });
 					return;
 				}
+				if (req.method === "GET" && path === "/api/v1/link-preview") {
+					// Link previews render whatever metadata the fixture captured
+					// (demo fixture ships the PR #25 preview); unknown urls 404 and
+					// the card shows its loading-failed state like the real app.
+					const file = resolve(frontendDir, "scripts/replay/fixtures/perc/ep-link-preview.json");
+					if (existsSync(file)) {
+						const captured = JSON.parse(readFileSync(file, "utf8"));
+						const url = url.searchParams.get("url") ?? "";
+						if (captured.url === url) {
+							sendJson(200, captured);
+							return;
+						}
+					}
+					sendJson(404, { error: { message: "replay: no link-preview capture for this url" } });
+					return;
+				}
 				const simplePerc = {
 					"/api/v1/settings": "ep-settings.json",
 					"/api/v1/mobile/status": "ep-mobile-status.json",
