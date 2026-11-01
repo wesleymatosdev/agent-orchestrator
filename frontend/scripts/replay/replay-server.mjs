@@ -454,6 +454,53 @@ async function main() {
 					sendJson(200, { notifications: [], unreadCount: 0, unresolvedCount: 0 });
 					return;
 				}
+				const simplePerc = {
+					"/api/v1/settings": "ep-settings.json",
+					"/api/v1/mobile/status": "ep-mobile-status.json",
+					"/api/v1/awake": "ep-awake.json",
+				};
+				if (req.method === "GET" && simplePerc[path]) {
+					const file = resolve(frontendDir, `scripts/replay/fixtures/perc/${simplePerc[path]}`);
+					if (existsSync(file)) {
+						res.setHeader("Content-Type", "application/json");
+						res.end(readFileSync(file, "utf8"));
+						return;
+					}
+				}
+				const agentModels = path.match(/^\/api\/v1\/agents\/([^/]+)\/models$/);
+				if (req.method === "GET" && agentModels) {
+					const file = resolve(frontendDir, `scripts/replay/fixtures/perc/ep-agents-${decodeURIComponent(agentModels[1])}-models.json`);
+					if (existsSync(file)) {
+						res.setHeader("Content-Type", "application/json");
+						res.end(readFileSync(file, "utf8"));
+						return;
+					}
+				}
+				const projectRoute = path.match(/^\/api\/v1\/projects\/([^/]+)$/);
+				if (req.method === "GET" && projectRoute) {
+					const file = resolve(frontendDir, `scripts/replay/fixtures/perc/ep-projects-${decodeURIComponent(projectRoute[1])}.json`);
+					if (existsSync(file)) {
+						res.setHeader("Content-Type", "application/json");
+						res.end(readFileSync(file, "utf8"));
+						return;
+					}
+				}
+				const sessionSub = path.match(/^\/api\/v1\/sessions\/([^/]+)\/(interface-transition|workspace\/files)$/);
+				if (req.method === "GET" && sessionSub) {
+					const name = sessionSub[2] === "interface-transition" ? "iface" : "wsfiles";
+					const file = resolve(frontendDir, `scripts/replay/fixtures/perc/ep-${name}-${decodeURIComponent(sessionSub[1])}.json`);
+					if (existsSync(file)) {
+						res.setHeader("Content-Type", "application/json");
+						res.end(readFileSync(file, "utf8"));
+						return;
+					}
+					// No capture: interface-transition is quiet when absent, the file
+					// list 404s like the real daemon.
+					if (name === "iface") {
+						sendJson(200, {});
+						return;
+					}
+				}
 				if (req.method === "GET" && (path === "/api/v1/agents/readiness" || path === "/api/v1/agents/chat/unavailable")) {
 					const name = path.endsWith("readiness") ? "ep-agents-readiness.json" : "ep-agents-chat-unavailable.json";
 					const file = resolve(frontendDir, `scripts/replay/fixtures/perc/${name}`);
