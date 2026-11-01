@@ -1,0 +1,18 @@
+{
+ "project": {
+  "id": "bela-portfolio1",
+  "name": "bela-portfolio",
+  "path": "/Users/wesleymatos/projects/clients/bela-portfolio"
+ },
+ "orchestratorSession": "bela-portfolio1-44",
+ "workerSession": "bela-portfolio1-45",
+ "workerTitle": "hero name letter arrival animations",
+ "branch": "ao/hero-letters/root",
+ "t0": "2026-11-01T14:09:30Z",
+ "tEnd": "2026-11-01T15:40:00Z",
+ "durationS": 5430,
+ "counts": {
+  "orch": 64,
+  "worker": 149
+ }
+}

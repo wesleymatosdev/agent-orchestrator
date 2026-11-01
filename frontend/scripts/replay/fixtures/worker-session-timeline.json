@@ -1,0 +1,30 @@
+{
+ "session": {
+  "id": "bela-portfolio1-45",
+  "title": "hero name letter arrival animations",
+  "kind": "worker",
+  "provider": "hermes",
+  "branch": "ao/hero-letters/root",
+  "createdAt": "2026-11-01T14:14:11Z",
+  "prOpenAt": "2026-11-01T15:14:46Z",
+  "busyFrom": "2026-11-01T14:14:14Z",
+  "busyUntil": "2026-11-01T15:23:44Z",
+  "prs": [
+   {
+    "url": "https://github.com/wesleymatosdev/bela-portfolio/pull/25",
+    "number": 25,
+    "state": "merged",
+    "ci": "unknown",
+    "review": "none",
+    "mergeability": "unknown",
+    "reviewComments": false,
+    "updatedAt": "2026-11-01T15:14:46Z"
+   }
+  ]
+ },
+ "project": {
+  "id": "bela-portfolio1",
+  "name": "bela-portfolio",
+  "path": "/Users/wesleymatos/projects/clients/bela-portfolio"
+ }
+}
