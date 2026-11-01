@@ -485,18 +485,23 @@ async function main() {
 						return;
 					}
 				}
-				const sessionSub = path.match(/^\/api\/v1\/sessions\/([^/]+)\/(interface-transition|workspace\/files)$/);
+				const sessionSub = path.match(/^\/api\/v1\/sessions\/([^/]+)\/(interface-transition|workspace\/files|workspace\/history|workspace\/manifest|pr)$/);
 				if (req.method === "GET" && sessionSub) {
-					const name = sessionSub[2] === "interface-transition" ? "iface" : "wsfiles";
+					const name =
+						sessionSub[2] === "interface-transition" ? "iface"
+						: sessionSub[2] === "workspace/files" ? "wsfiles"
+						: sessionSub[2] === "workspace/history" ? "history"
+						: sessionSub[2] === "workspace/manifest" ? "manifest"
+						: "pr";
 					const file = resolve(frontendDir, `scripts/replay/fixtures/perc/ep-${name}-${decodeURIComponent(sessionSub[1])}.json`);
 					if (existsSync(file)) {
 						res.setHeader("Content-Type", "application/json");
 						res.end(readFileSync(file, "utf8"));
 						return;
 					}
-					// No capture: interface-transition is quiet when absent, the file
-					// list 404s like the real daemon.
-					if (name === "iface") {
+					// No capture: interface-transition and pr are quiet when absent;
+					// the workspace paths 404 like the real daemon.
+					if (name === "iface" || name === "pr") {
 						sendJson(200, {});
 						return;
 					}
