@@ -537,9 +537,9 @@ async function main() {
 					sendJson(200, fixtures.projects);
 					return;
 				}
-				if (req.method === "POST" && path.endsWith("/send")) {
-					// The demo never really sends; accept and drop so an accidental
-					// send in the UI does not error.
+				if (req.method === "POST" && (path.endsWith("/send") || path.startsWith("/api/v1/"))) {
+					// The demo never really mutates; accept and drop any incidental
+					// UI write so replay state stays exactly what the clock serves.
 					sendJson(200, { accepted: true });
 					return;
 				}
