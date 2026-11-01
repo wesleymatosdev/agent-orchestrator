@@ -112,6 +112,23 @@ entry in the **project board's action row** ("Replay dispatch…") covers the
 orchestrator-dispatch arc that starts from the project conversation, where the
 spawned session's header doesn't exist yet.
 
+## Options
+
+- `REPLAY_SHOW_COMMANDS=0` (or `--show-commands 0`) hides command / file-change
+  / mcp_tool activity rows from the replay; default **shown** (owner
+  preference). The filter applies to the SSE schedule and the served snapshot
+  activities, never to the sequence cutoff, so message timing is unchanged.
+- `--scale <n>` multiplies the base story speed (the warp segments divide out
+  of the same clock; the option is kept for simple fixtures without warps).
+
+## Round-3 UI control
+
+The activity-rows toggle belongs next to the export-demo entry: in the export
+dialog (session header overflow menu → "Export demo replay…") as a checkbox
+"Include command and file-change activity", defaulting to on; the board
+action-row entry ("Replay dispatch…") passes the same option. Round 2 keeps it
+a daemon `--replay` query/env parameter.
+
 ## Verification
 
 Captured headless with Playwright (`page.screenshot` samples; frame mtimes are

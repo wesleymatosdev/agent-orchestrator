@@ -36,13 +36,23 @@ const viteModule = await import(pathToFileURL(resolve(frontendDir, "node_modules
 const createServer = viteModule.createServer;
 
 function parseArgs(argv) {
-	const out = { fixtures: resolve(frontendDir, "scripts/replay/fixtures"), port: 4173, scale: 12 };
+	const out = {
+		fixtures: resolve(frontendDir, "scripts/replay/fixtures"),
+		port: 4173,
+		scale: 12,
+		// Whether command/file-change/mcp_tool activity rows render in the
+		// replay. Default SHOWN (owner preference); REPLAY_SHOW_COMMANDS=0 or
+		// --show-commands 0 hides them. The round-3 UI control belongs to the
+		// export-button spec (see README.md).
+		showCommands: process.env.REPLAY_SHOW_COMMANDS !== "0",
+	};
 	for (let i = 2; i < argv.length; i += 1) {
 		const flag = argv[i];
 		const next = () => argv[++i];
 		if (flag === "--fixtures") out.fixtures = resolve(next());
 		else if (flag === "--port") out.port = Number(next());
 		else if (flag === "--scale") out.scale = Number(next());
+		else if (flag === "--show-commands") out.showCommands = next() !== "0";
 		else throw new Error(`unknown flag: ${flag}`);
 	}
 	return out;
@@ -81,6 +91,13 @@ function createReplay(opts, fixtures) {
 	const workerId = meta.workerSession;
 	const project = meta.project;
 	const fields = fixtures.workerFields.session;
+
+	// Activity rows hidden by the show-commands option. Filtering applies to
+	// the SSE schedule and the served activity lists, but never to the
+	// sequence cutoff: message visibility must keep its real timing.
+	const hiddenActivityKinds = opts.showCommands
+		? new Set()
+		: new Set(["command", "file_change", "mcp_tool"]);
 
 	const storyOf = (isoString) => {
 		const t = Date.parse(isoString);
@@ -163,7 +180,9 @@ function createReplay(opts, fixtures) {
 		const cutoff = cutoffAt(conv, storyT);
 		const inWindow = (items) => items.filter((item) => item.sequence <= cutoff && item.sequence >= 1);
 		const messages = inWindow(capture.messages ?? []);
-		const activities = inWindow(capture.activities ?? []);
+		const activities = inWindow(capture.activities ?? []).filter(
+			(activity) => !hiddenActivityKinds.has(activity.activityKind),
+		);
 		const turns = (capture.turns ?? []).flatMap((turn) => {
 			const reqT = storyOf(turn.requestedAt);
 			if (reqT === null || reqT > storyT) return [];
@@ -310,6 +329,7 @@ function createReplay(opts, fixtures) {
 		if (fields.busyFrom) boardBeats.add(Math.max(storyOf(fields.busyFrom), 0));
 		if (fields.busyUntil) boardBeats.add(Math.max(storyOf(fields.busyUntil), 0));
 		for (const event of fixtures.timeline.events) {
+			if (hiddenActivityKinds.has(event.kind === "activity" ? event.activityKind : "")) continue;
 			const delayS = Math.max(event.t, 0);
 			frames.push({
 				atS: delayS,
@@ -566,6 +586,7 @@ async function main() {
 	console.log(`  story window : ${replay.meta.t0} -> ${replay.meta.tEnd} (${replay.durationS}s story)`);
 	console.log(`  warps        : ${replay.warps.map((w) => `${Math.round(w.from)}-${Math.round(w.to)}@${w.scale}x`).join("  ")}`);
 	console.log(`  wall length  : ~${Math.round(replay.wallOfStory(replay.durationS))}s`);
+	console.log(`  activity rows: ${opts.showCommands ? "shown" : "hidden (command/file_change/mcp_tool filtered)"} [REPLAY_SHOW_COMMANDS=0 to hide]`);
 	console.log(`  orchestrator : /projects/${replay.project.id}/sessions/${replay.orchId}`);
 	console.log(`  board        : /projects/${replay.project.id}`);
 	console.log(`  worker       : /projects/${replay.project.id}/sessions/${replay.workerId}`);
