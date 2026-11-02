@@ -366,7 +366,56 @@ export interface ConversationQueryResult {
 	loadOlder: () => void;
 }
 
+/**
+ * Rows that come back identical are represented by the SAME object references
+ * as the cached snapshot, so React reconciles only new or revised rows. The
+ * 462 kB JSON.parse still happens in the fetch layer (cheap, single-digit ms);
+ * it is the full-list reconcile this merge removes.
+ */
+const diffMergeChunkRows = 64;
+const diffMergeBudgetMs = 3;
+const yieldToMain = (): Promise<void> => {
+	const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+	if (typeof scheduler?.yield === "function") return scheduler.yield();
+	return new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+export async function diffMergeSnapshot(previous: ConversationSnapshot, latest: ConversationSnapshot): Promise<ConversationSnapshot> {
+	const previousItems = new Map<string, ConversationItem>();
+	for (const item of previous.items) previousItems.set(`${item.kind}:${item.id}`, item);
+
+	// Compute in chunks and yield once the per-frame budget is spent, so a
+	// large page merge can never occupy a whole frame; keystroke handling runs
+	// between chunks.
+	const items: ConversationItem[] = [];
+	const start = performance.now();
+	for (let i = 0; i < latest.items.length; i += 1) {
+		const incoming = latest.items[i];
+		const prev = previousItems.get(`${incoming.kind}:${incoming.id}`);
+		// Same row (id + sequence) at the same revision is the same content:
+		// keep the previous reference. Anything else takes the fresh row.
+		items.push(prev && prev.sequence === incoming.sequence && (prev.revision ?? 0) === (incoming.revision ?? 0) ? prev : incoming);
+		if ((i & (diffMergeChunkRows - 1)) === diffMergeChunkRows - 1 && performance.now() - start > diffMergeBudgetMs) {
+			await yieldToMain();
+		}
+	}
+
+	const previousTurns = new Map(previous.turns.map((turn) => [turn.id, turn]));
+	const turns = latest.turns.map((turn) => {
+		const prev = previousTurns.get(turn.id);
+		return prev && JSON.stringify(prev) === JSON.stringify(turn) ? prev : turn;
+	});
+
+	// Scalars (controller state, usage, settings, sequences...) always take the
+	// latest values; older history pages keep their references via the caller.
+	return { ...latest, items, turns };
+}
+
 async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+	// The daemon serves snapshots with ETag + Cache-Control: no-cache, so this
+	// GET revalidates in the browser's HTTP cache: an unchanged conversation
+	// answers 304 and resolves from cache (~200 bytes on the wire) without any
+	// client-side header handling (If-None-Match itself is browser-managed).
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
 		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
 	});
@@ -384,18 +433,29 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 		throw error;
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
-	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (previous) => {
-		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
-		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
-		const priorLive = previous.pages[0];
-		const slidOut = latest.oldestSequence > priorLive.oldestSequence
-			? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
-			: [];
-		const slidTurnIds = new Set(slidOut.map((item) => item.turnId));
-		const live = slidOut.length
-			? mergeConversationPages([latest, { ...priorLive, items: slidOut, turns: priorLive.turns.filter((turn) => slidTurnIds.has(turn.id)) }]) ?? latest
-			: latest;
-		return { ...previous, pages: [live, ...previous.pages.slice(1)] };
+	const previous = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId));
+	if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return;
+	if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) {
+		queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), { pages: [latest], pageParams: [undefined] });
+		return;
+	}
+	const priorLive = previous.pages[0];
+	const slidOut = latest.oldestSequence > priorLive.oldestSequence
+		? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
+		: [];
+	const slidTurnIds = new Set(slidOut.map((item) => item.turnId));
+	const merged = slidOut.length
+		? mergeConversationPages([latest, { ...priorLive, items: slidOut, turns: priorLive.turns.filter((turn) => slidTurnIds.has(turn.id)) }]) ?? latest
+		: latest;
+	// Structural-sharing merge: rows the poll did not change keep their cached
+	// object references, applied in chunks so the merge cannot occupy a frame.
+	const live = await diffMergeSnapshot(priorLive, merged);
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (current) => {
+		// The cache may have moved during the merge's yields (loadOlder appended
+		// a page); only commit onto the snapshot this merge was based on. The
+		// next poll merges against the newer cache.
+		if (!current || current.pages[0] !== priorLive) return current;
+		return { ...current, pages: [live, ...current.pages.slice(1)] };
 	});
 }
 

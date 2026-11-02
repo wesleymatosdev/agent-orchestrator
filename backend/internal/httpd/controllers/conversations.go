@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -919,7 +920,33 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 	// Excerpt verification is owned by AO, independently of provider capabilities.
 	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true
-	envelope.WriteJSON(w, http.StatusOK, response)
+	// Conditional GET: snapshots are large and polled every couple of seconds by
+	// live clients, so answer If-None-Match with 304 Not Modified while the body
+	// is unchanged. The validator is the exact response body's hash, so any
+	// field change (message, usage, controller state) produces a new ETag —
+	// header-level caching with no wire-shape change and no effect on clients
+	// that never send the header.
+	body, err := json.Marshal(response)
+	if err != nil {
+		// Marshaling our own response cannot fail in practice; fall back to the
+		// unconditioned write rather than inventing an error path.
+		envelope.WriteJSON(w, http.StatusOK, response)
+		return
+	}
+	etag := fmt.Sprintf("\"%x\"", sha1.Sum(body))
+	// no-cache (not no-store): the browser keeps the body and revalidates every
+	// fetch with If-None-Match, so an unchanged poll costs ~200 bytes. The
+	// validator is browser-managed — scripts cannot set If-None-Match themselves.
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if strings.Contains(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	_, _ = w.Write([]byte("\n"))
 }
 
 func optionalPositiveInt64(raw string) (int64, error) {

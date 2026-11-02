@@ -305,6 +305,91 @@ func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[strin
 	return decoded
 }
 
+// Conditional GET: the snapshot handler answers If-None-Match with 304 Not
+// Modified while the body is unchanged, and a fresh ETag (plus the full body)
+// once any field changes.
+func TestConversationSnapshotConditionalGet(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	snapshot := chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "sent", TurnID: "t1", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "hi", CreatedAt: now},
+		},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := &fakeConversationService{snapshot: snapshot}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
+		Sessions:      newFakeSessionService(),
+		Conversations: svc,
+	}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	url := srv.URL + "/api/v1/sessions/p1-1/conversation"
+
+	first, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET conversation: %v", err)
+	}
+	etag := first.Header.Get("ETag")
+	body, _ := io.ReadAll(first.Body)
+	_ = first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first status = %d", first.StatusCode)
+	}
+	if etag == "" {
+		t.Fatal("first response carries no ETag")
+	}
+	// no-cache keeps the body stored but forces revalidation, which is what
+	// makes the browser send If-None-Match on the next poll.
+	if got := first.Header.Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", got)
+	}
+
+	conditional, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	conditional.Header.Set("If-None-Match", etag)
+	notModified, err := http.DefaultClient.Do(conditional)
+	if err != nil {
+		t.Fatalf("conditional GET: %v", err)
+	}
+	_, _ = io.ReadAll(notModified.Body)
+	_ = notModified.Body.Close()
+	if notModified.StatusCode != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want 304", notModified.StatusCode)
+	}
+	if got := notModified.Header.Get("ETag"); got != etag {
+		t.Fatalf("304 ETag = %q, want %q", got, etag)
+	}
+
+	// Any field change (here: a new message) must produce a new ETag and the
+	// full body again.
+	svc.snapshot.Messages = append(svc.snapshot.Messages, domain.ConversationMessage{
+		ID: "reply", TurnID: "t1", Sequence: 2, Role: domain.MessageRoleAssistant, Origin: domain.MessageOriginProvider, Text: "hello", CreatedAt: now,
+	})
+	changed, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	changed.Header.Set("If-None-Match", etag)
+	full, err := http.DefaultClient.Do(changed)
+	if err != nil {
+		t.Fatalf("changed GET: %v", err)
+	}
+	changedBody, _ := io.ReadAll(full.Body)
+	_ = full.Body.Close()
+	if full.StatusCode != http.StatusOK {
+		t.Fatalf("changed status = %d, want 200", full.StatusCode)
+	}
+	if string(changedBody) == string(body) {
+		t.Fatal("changed response body is identical to the cached body")
+	}
+	if next := full.Header.Get("ETag"); next == "" || next == etag {
+		t.Fatalf("changed response ETag = %q, want a fresh validator", next)
+	}
+}
+
 func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
