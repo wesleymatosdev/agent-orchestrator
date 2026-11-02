@@ -28,9 +28,13 @@ ORDER BY r.created_at, r.id, o.position;
 -- name: ListReportsByProject :many
 SELECT * FROM reports WHERE project_id = ? ORDER BY created_at, id;
 
+-- The coordinator's time-driven schedule. A report whose UI notice already went
+-- out (ui_notified_at set) has left this schedule: chat orchestrators keep the
+-- row pending for piggyback agent-context injection, and the coordinator must
+-- not notice the same batch twice.
 -- name: ListPendingReportSchedule :many
 SELECT * FROM reports
-WHERE delivery_state = 'pending'
+WHERE delivery_state = 'pending' AND ui_notified_at IS NULL
 ORDER BY available_at, created_at, id
 LIMIT ?;
 
@@ -58,6 +62,13 @@ RETURNING *;
 -- name: AcknowledgeReportBatch :many
 UPDATE reports
 SET delivery_state = 'acknowledged', acknowledged_at = sqlc.arg(acknowledged_at)
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token)
+RETURNING *;
+
+-- name: MarkReportBatchUINotified :many
+UPDATE reports
+SET ui_notified_at = sqlc.arg(notified_at)
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
 RETURNING *;

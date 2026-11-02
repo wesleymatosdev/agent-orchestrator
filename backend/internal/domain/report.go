@@ -134,6 +134,11 @@ type ReportRecord struct {
 	AcknowledgedAt     time.Time
 	LastError          string
 	DeliveryBatchID    string
+	// UINotifiedAt records when the batch became visible in the orchestrator
+	// conversation without a provider turn. It retires the report from the
+	// coordinator's schedule while the row stays pending for piggyback
+	// agent-context injection.
+	UINotifiedAt time.Time
 }
 
 // ErrInvalidReport reports an invalid report or delivery transition input.

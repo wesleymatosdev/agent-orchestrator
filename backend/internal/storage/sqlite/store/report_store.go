@@ -156,6 +156,24 @@ func (s *Store) AcknowledgeReportBatch(ctx context.Context, projectID domain.Pro
 	return len(rows), nil
 }
 
+// MarkReportBatchUINotified stamps the claimed batch as visible in the
+// orchestrator conversation without a provider turn. The rows stay claimed so
+// the caller can release them back to pending for piggyback injection.
+func (s *Store) MarkReportBatchUINotified(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) (int, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.MarkReportBatchUINotified(ctx, gen.MarkReportBatchUINotifiedParams{
+		ProjectID: string(projectID), ClaimToken: token, NotifiedAt: nullTime(at),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark project report batch ui-notified: %w", err)
+	}
+	return len(rows), nil
+}
+
 // ReleaseReportBatch returns the matching project batch to pending without
 // moving any report's original deadline later.
 func (s *Store) ReleaseReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
@@ -319,6 +337,6 @@ func reportFromGen(r gen.Report) domain.ReportRecord {
 		SettlementDeadline: timeFromNull(r.SettlementDeadline), RepeatCount: r.RepeatCount,
 		ClaimToken: r.ClaimToken, ClaimedAt: timeFromNull(r.ClaimedAt), DeliveryAttempts: r.DeliveryAttempts,
 		AcknowledgedAt: timeFromNull(r.AcknowledgedAt), LastError: r.LastError,
-		DeliveryBatchID: r.DeliveryBatchID,
+		DeliveryBatchID: r.DeliveryBatchID, UINotifiedAt: timeFromNull(r.UiNotifiedAt),
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -20,6 +21,9 @@ import (
 // ReportInterruptWindow is the durable per-worker urgent interruption limit.
 const ReportInterruptWindow = 3 * time.Minute
 
+// reportScheduleScan bounds one coordinator pass across all projects.
+const reportScheduleScan = 200
+
 // ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
 
@@ -30,6 +34,7 @@ type DeliveryStore interface {
 	ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error)
 	ClaimPendingReportBatch(context.Context, domain.ProjectID, string, time.Time) ([]domain.ReportRecord, error)
 	AcknowledgeReportBatch(context.Context, domain.ProjectID, string, time.Time) (int, error)
+	MarkReportBatchUINotified(context.Context, domain.ProjectID, string, time.Time) (int, error)
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	DeferReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	AcquireReportInterrupt(context.Context, domain.SessionID, time.Time, time.Duration) (bool, time.Time, error)
@@ -41,14 +46,22 @@ type Delivery interface {
 	Interrupt(context.Context, domain.SessionID) error
 }
 
+// Notice makes a settled batch visible in a chat orchestrator's conversation
+// without dispatching a provider turn.
+type Notice interface {
+	Notify(ctx context.Context, target domain.SessionID, message, clientMessageID string) (bool, error)
+}
+
 // Coordinator delivers durable report batches to active orchestrators.
 type Coordinator struct {
 	store      DeliveryStore
 	delivery   Delivery
+	notice     Notice
 	now        func() time.Time
 	newToken   func() string
 	retryDelay time.Duration
 	wake       chan struct{}
+	log        *slog.Logger
 	mu         sync.Mutex
 }
 
@@ -56,9 +69,11 @@ type Coordinator struct {
 type CoordinatorDeps struct {
 	Store      DeliveryStore
 	Delivery   Delivery
+	Notice     Notice
 	Now        func() time.Time
 	NewToken   func() string
 	RetryDelay time.Duration
+	Logger     *slog.Logger
 }
 
 // NewCoordinator constructs an idle report delivery coordinator.
@@ -72,7 +87,11 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.RetryDelay <= 0 {
 		d.RetryDelay = 5 * time.Second
 	}
-	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1)}
+	log := d.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Coordinator{store: d.Store, delivery: d.Delivery, notice: d.Notice, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1), log: log}
 }
 
 // Wake asks the coordinator to inspect durable scheduling state.
@@ -120,28 +139,51 @@ func (c *Coordinator) run(ctx context.Context) {
 
 // RunDue performs bounded due delivery and returns the delay until the next
 // durable deadline. Tests call it directly with fake time.
+//
+// Delivery is per-project fault-isolated: a project whose delivery keeps
+// failing (no active orchestrator, an unavailable notice path) is logged and
+// retried on the next pass. It must never block another project's due reports —
+// the schedule is global and ordered by available_at, so one stuck project
+// would otherwise starve every project behind it forever.
 func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	if c == nil || c.store == nil || c.delivery == nil {
 		return -1, errors.New("report coordinator dependencies are required")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for {
-		pending, err := c.store.ListPendingReportSchedule(ctx, 1)
-		if err != nil {
-			return c.retryDelay, err
+	pending, err := c.store.ListPendingReportSchedule(ctx, reportScheduleScan)
+	if err != nil {
+		return c.retryDelay, err
+	}
+	now := c.now().UTC()
+	var next time.Time
+	var firstErr error
+	attempted := map[domain.ProjectID]bool{}
+	for _, report := range pending {
+		if report.AvailableAt.After(now) {
+			if next.IsZero() || report.AvailableAt.Before(next) {
+				next = report.AvailableAt
+			}
+			continue
 		}
-		if len(pending) == 0 {
-			return -1, nil
+		if attempted[report.ProjectID] {
+			continue
 		}
-		now := c.now().UTC()
-		if pending[0].AvailableAt.After(now) {
-			return pending[0].AvailableAt.Sub(now), nil
-		}
-		if err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
-			return c.retryDelay, err
+		attempted[report.ProjectID] = true
+		if err := c.deliverProject(ctx, report.ProjectID); err != nil {
+			c.log.Error("report delivery failed", "project", report.ProjectID, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	if firstErr != nil {
+		return c.retryDelay, firstErr
+	}
+	if next.IsZero() {
+		return -1, nil
+	}
+	return next.Sub(now), nil
 }
 
 func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
@@ -178,10 +220,44 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			return deferErr
 		}
 	}
+	if domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
+		return c.deliverChatBatch(ctx, target.ID, batch)
+	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
 		return c.release(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+	return err
+}
+
+// deliverChatBatch shows a settled batch in a chat orchestrator's conversation
+// as a turn-less notice and then releases it back to pending. The notice fires
+// the conversation CDC pipeline so connected clients render the report card
+// immediately, without waking the orchestrator agent; the next owner turn still
+// piggybacks the reports into the agent's context, which stays turn-coupled by
+// design. The notice is idempotent per batch, so a later retry cannot duplicate
+// the card.
+func (c *Coordinator) deliverChatBatch(ctx context.Context, target domain.SessionID, batch PreparedBatch) error {
+	if c.notice == nil {
+		// Without a notice path the semantic send remains the only delivery.
+		if err := c.delivery.Submit(ctx, target, batch.Render(), batch.IdempotencyKey()); err != nil {
+			return c.release(ctx, batch, err)
+		}
+		_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+		return err
+	}
+	created, err := c.notice.Notify(ctx, target, batch.Render(), "report-card:"+batch.IdempotencyKey())
+	if err != nil {
+		return c.release(ctx, batch, err)
+	}
+	if created {
+		if _, err := c.store.MarkReportBatchUINotified(ctx, batch.ProjectID, batch.Token, c.now().UTC()); err != nil {
+			return c.release(ctx, batch, err)
+		}
+	}
+	// Release without an error keeps the original available_at and clears the
+	// claim, leaving the batch to piggyback's agent-context injection.
+	_, err = c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), "")
 	return err
 }
 

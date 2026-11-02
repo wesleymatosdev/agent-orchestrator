@@ -634,6 +634,8 @@ func Run(buildVersion string) error {
 	reportCoordinator = reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{
 		Store:    store,
 		Delivery: reportSemanticDelivery{chat: chatSvc, sessions: reportSessions, store: store},
+		Notice:   reportNoticeDelivery{chat: chatSvc},
+		Logger:   log,
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone := reportCoordinator.Start(ctx)
@@ -1292,6 +1294,19 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}
 	return d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+}
+
+// reportNoticeDelivery routes the coordinator's chat-path batch notices through
+// the chat service's turn-less conversation write.
+type reportNoticeDelivery struct {
+	chat *chatsvc.Service
+}
+
+func (d reportNoticeDelivery) Notify(ctx context.Context, id domain.SessionID, message, clientMessageID string) (bool, error) {
+	if d.chat == nil {
+		return false, reportsvc.ErrReportDeliveryModeUnsupported
+	}
+	return d.chat.NotifyReportBatch(ctx, id, message, clientMessageID)
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {

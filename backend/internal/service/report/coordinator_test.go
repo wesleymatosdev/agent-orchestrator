@@ -144,6 +144,88 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	}
 }
 
+func TestCoordinatorChatNoticeShowsCardWithoutWakingAgent(t *testing.T) {
+	now := time.Date(2026, 9, 14, 14, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("done", "worker", now, now, "finished"))
+	notice := &coordinatorNotice{}
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Notice: notice, Now: func() time.Time { return now }, NewToken: func() string { return "claim" }})
+
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 0 {
+		t.Fatalf("chat notice dispatched a provider turn: %#v", delivery.submissions)
+	}
+	if len(notice.notices) != 1 {
+		t.Fatalf("notices = %#v", notice.notices)
+	}
+	if notice.notices[0].target != "orch" ||
+		!strings.Contains(notice.notices[0].message, "finished") ||
+		!strings.HasPrefix(notice.notices[0].key, "report-card:") {
+		t.Fatalf("notice = %#v", notice.notices[0])
+	}
+	for _, rec := range store.reports {
+		if rec.DeliveryState != domain.ReportPending || rec.UINotifiedAt.IsZero() {
+			t.Fatalf("report after notice = %#v, want pending and ui-notified", rec)
+		}
+	}
+	if store.acked != 0 {
+		t.Fatal("chat card path acknowledged reports; agent-context piggyback would lose them")
+	}
+
+	// A second pass must not re-notice the settled batch.
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(notice.notices) != 1 {
+		t.Fatalf("re-noticed batch: %#v", notice.notices)
+	}
+
+	// The next owner turn still carries the reports into agent context.
+	batch, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(batch.Reports) != 1 {
+		t.Fatalf("piggyback after notice = %#v, err = %v", batch, err)
+	}
+	if err := c.AcceptPiggyback(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if store.acked != 1 {
+		t.Fatalf("acknowledged = %d, want 1", store.acked)
+	}
+}
+
+func TestCoordinatorFailingProjectDoesNotBlockOthers(t *testing.T) {
+	now := time.Date(2026, 9, 14, 15, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	// The earliest deadline belongs to a project with no active orchestrator;
+	// delivery there fails persistently, as it did in production.
+	store.add(reportIn("stuck-src", "blocked", "worker", now, now, "note"))
+	store.add(reportIn("due", "healthy", "worker2", now, now, "note2"))
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "healthy", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	notice := &coordinatorNotice{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: &coordinatorDelivery{}, Notice: notice, Now: func() time.Time { return now }, RetryDelay: 3 * time.Second})
+
+	delay, err := c.RunDue(context.Background())
+	if err == nil {
+		t.Fatal("want the failing project's error")
+	}
+	if delay != 3*time.Second {
+		t.Fatalf("delay = %v, want the retry delay", delay)
+	}
+	noticed := false
+	for _, n := range notice.notices {
+		if n.target == "orch" {
+			noticed = true
+		}
+	}
+	if !noticed {
+		t.Fatal("healthy project starved behind the failing one")
+	}
+}
+
 type coordinatorStore struct {
 	mu         sync.Mutex
 	now        time.Time
@@ -161,11 +243,41 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 	return domain.ReportRecord{ID: id, SessionID: worker, ProjectID: "p", State: domain.ReportCheckpoint, Note: note, CreatedAt: created, AvailableAt: available, DeliveryState: domain.ReportPending, RepeatCount: 1}
 }
 
+func reportIn(id string, project domain.ProjectID, worker domain.SessionID, created, available time.Time, note string) domain.ReportRecord {
+	rec := reportAt(id, worker, created, available, note)
+	rec.ProjectID = project
+	return rec
+}
+
+type coordinatorNoticeRecord struct {
+	target       domain.SessionID
+	message, key string
+}
+
+type coordinatorNotice struct {
+	notices []coordinatorNoticeRecord
+	err     error
+}
+
+func (n *coordinatorNotice) Notify(_ context.Context, target domain.SessionID, message, clientMessageID string) (bool, error) {
+	if n.err != nil {
+		return false, n.err
+	}
+	n.notices = append(n.notices, coordinatorNoticeRecord{target, message, clientMessageID})
+	return true, nil
+}
+
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
-func (s *coordinatorStore) ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), s.sessions...), nil
+func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	var out []domain.SessionRecord
+	for _, rec := range s.sessions {
+		if rec.ProjectID == project {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	for _, rec := range s.sessions {
@@ -175,18 +287,18 @@ func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (d
 	}
 	return domain.SessionRecord{}, false, nil
 }
-func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]domain.ReportRecord, error) {
+func (s *coordinatorStore) ListPendingReportSchedule(_ context.Context, limit int64) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var pending []domain.ReportRecord
 	for _, rec := range s.reports {
-		if rec.DeliveryState == domain.ReportPending {
+		if rec.DeliveryState == domain.ReportPending && rec.UINotifiedAt.IsZero() {
 			pending = append(pending, rec)
 		}
 	}
 	sortReports(pending)
-	if len(pending) > 1 {
-		pending = pending[:1]
+	if int64(len(pending)) > limit {
+		pending = pending[:limit]
 	}
 	return pending, nil
 }
@@ -228,6 +340,18 @@ func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project dom
 		}
 	}
 	s.acked += count
+	return count, nil
+}
+func (s *coordinatorStore) MarkReportBatchUINotified(_ context.Context, project domain.ProjectID, token string, at time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for i := range s.reports {
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
+			s.reports[i].UINotifiedAt = at
+			count++
+		}
+	}
 	return count, nil
 }
 func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, _ string) (int, error) {

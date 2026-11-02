@@ -1449,6 +1449,56 @@ func (s *Store) ConversationMessageByClientID(
 	return messageToDomain(row), true, nil
 }
 
+// AppendConversationNotice writes a daemon-authored user message with no turn.
+// It renders in the timeline and fires the conversation CDC pipeline, but never
+// dispatches a provider turn, so a settled worker-report batch becomes visible
+// without waking the orchestrator agent. Idempotent per conversation through the
+// client message id: a repeated call reports created=false and writes nothing.
+func (s *Store) AppendConversationNotice(
+	ctx context.Context,
+	conversationID string,
+	session domain.SessionID,
+	msg domain.ConversationMessage,
+	now time.Time,
+) (created bool, err error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if msg.ClientMessageID != "" {
+		if _, found, lookupErr := s.ConversationMessageByClientID(ctx, conversationID, msg.ClientMessageID); lookupErr != nil {
+			return false, fmt.Errorf("lookup client message %s: %w", msg.ClientMessageID, lookupErr)
+		} else if found {
+			return false, nil
+		}
+	}
+	err = s.inTx(ctx, "append conversation notice", func(q *gen.Queries) error {
+		sequence, seqErr := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
+			UpdatedAt: now,
+			ID:        conversationID,
+		})
+		if seqErr != nil {
+			return fmt.Errorf("allocate sequence: %w", seqErr)
+		}
+		return q.InsertConversationMessage(ctx, gen.InsertConversationMessageParams{
+			ID:              msg.ID,
+			ConversationID:  conversationID,
+			TurnID:          sql.NullString{},
+			Sequence:        sequence,
+			Role:            domain.MessageRoleUser,
+			Origin:          msg.Origin,
+			Text:            msg.Text,
+			ClientMessageID: msg.ClientMessageID,
+			SenderSessionID: msg.SenderSessionID,
+			SenderProjectID: msg.SenderProjectID,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		})
+	})
+	if err != nil {
+		return false, fmt.Errorf("append conversation notice: %w", err)
+	}
+	return true, nil
+}
+
 // ConversationMessages returns the durable transcript in sequence order.
 func (s *Store) ConversationMessages(ctx context.Context, conversationID string) ([]domain.ConversationMessage, error) {
 	rows, err := s.qr.SelectConversationMessages(ctx, conversationID)
