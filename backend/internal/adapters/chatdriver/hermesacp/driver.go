@@ -65,8 +65,9 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityDiffs: true,
 		},
-		NormalizeText: normalizeCardLabels,
-		Configure:     configure,
+		NormalizeText:   normalizeCardLabels,
+		Configure:       configure,
+		SessionPreamble: SessionPreamble,
 		// Hermes advertises exactly its owner's current edit-approval policy as
 		// the session's only mode and refuses session/set_mode (the gateway has
 		// no verb that changes it). The mode is the session's fixed policy, not
@@ -80,14 +81,39 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 	}, log)
 }
 
+// SessionPreamble delivers AO's standing instructions as a text block ahead of
+// the first prompt. Stock Hermes's ACP adapter proxies every prompt to its
+// shared gateway process (GatewayACPAgent -> prompt.submit RPC) and executes
+// turns there, so a HERMES_EPHEMERAL_SYSTEM_PROMPT set on the `hermes acp`
+// child never reaches the model — Hermes silently falls back to the user's
+// profile system prompt. Like DeepSeek Harness, Hermes accepts no
+// system-prompt launch flag and reads no session/new _meta, so plain text on
+// the first turn is the only channel it follows. The output-language pin rides
+// in the same block: hermes sessions on Z.ai/GLM models otherwise narrate tool
+// calls and approval requests in Chinese, which AO users cannot act on. The
+// preamble leads only the first prompt of a new provider session; that is
+// correct here, because a fresh provider session is created on every
+// chat-host relaunch and each one gets it.
+func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
+	standing := strings.TrimSpace(cfg.SystemPrompt)
+	if standing == "" {
+		return nil
+	}
+	return []acpsdk.ContentBlock{acpsdk.TextBlock(
+		"Standing instructions from Agent Orchestrator. Follow them for this whole session:\n" +
+			"<ao_standing_instructions>\n" + standing + "\n" + outputLanguageInstruction + "\n</ao_standing_instructions>",
+	)}
+}
+
 // configure adds provider-native arguments and environment overlays. Hermes'
 // ACP server has no launch-time model flag — models are session-owned and
-// switched through the ACP config options the session response advertises — and
-// no system-prompt flag, so standing instructions ride in
-// HERMES_EPHEMERAL_SYSTEM_PROMPT, which Hermes injects at API-call time without
-// persisting it into the transcript. The output-language pin is appended
-// unconditionally: hermes sessions on Z.ai/GLM models otherwise narrate tool
-// calls and approval requests in Chinese, which AO users cannot act on.
+// switched through the ACP config options the session response advertises. The
+// HERMES_EPHEMERAL_SYSTEM_PROMPT overlay is kept even though it is unreliable:
+// Hermes's gateway executes turns in a process that never sees this child's
+// environment, so the standing prompt actually reaches the model through
+// SessionPreamble above — the overlay stays only on the chance a future Hermes
+// honors it at launch. The output-language pin is appended unconditionally so
+// any channel that does work still pins the language.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
 	prompt := strings.TrimSpace(cfg.SystemPrompt)
