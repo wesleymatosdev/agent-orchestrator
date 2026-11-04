@@ -765,6 +765,37 @@ describe("ActivityRow command labels", () => {
     expect(label.textContent?.length).toBeLessThanOrEqual(72);
     expect(label.closest("strong")).toHaveAttribute("title", command);
   });
+
+  // Historical daemon builds stored a tool call with no payload as JSON null,
+  // and `null !== undefined` made the row expandable onto a literal "null".
+  // A hermes delegate call ("Agent tool" with no content) is the live case.
+  it("treats null tool payloads as absent instead of rendering them", () => {
+    render(
+      <ActivityRow activity={{
+        kind: "activity", id: "agent-call", sequence: 1, revision: 1, createdAt: "2026-10-23T00:00:00Z",
+        activityKind: "mcp_tool", status: "completed", summary: "Agent tool",
+        detail: { arguments: null, result: null, content: null },
+      }} />,
+    );
+    expect(screen.getByText("Agent tool")).toBeInTheDocument();
+    expect(screen.queryByText("null")).not.toBeInTheDocument();
+    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByRole("button")).not.toHaveAttribute("aria-expanded");
+  });
+
+  it("opens an mcp_tool row onto its arguments when the daemon stored them", () => {
+    render(
+      <ActivityRow activity={{
+        kind: "activity", id: "agent-call", sequence: 1, revision: 1, createdAt: "2026-10-23T00:00:00Z",
+        activityKind: "mcp_tool", status: "completed", summary: "Agent tool",
+        detail: { arguments: { task: "fix the flaky test" } },
+      }} />,
+    );
+    expect(screen.getByRole("button")).toBeEnabled();
+    act(() => screen.getByRole("button").click());
+    expect(screen.getByText("Arguments")).toBeInTheDocument();
+    expect(screen.getByText(/fix the flaky test/)).toBeInTheDocument();
+  });
 });
 
 describe("HumanMessage", () => {
